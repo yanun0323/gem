@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -111,7 +112,16 @@ func (m *migrator) Generate() error {
 		return err
 	}
 
+	timestamp, err := strconv.ParseInt(time.Now().Format("20060102150405"), 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse timestamp, err: %w", err)
+	}
+
+	timestamp -= int64(len(m.models))
+
 	for _, model := range m.models {
+		timestamp++
+
 		schema, indexes, err := parseModelToSQLWithIndexes(model)
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
@@ -133,7 +143,7 @@ func (m *migrator) Generate() error {
 
 		if snapshot == nil {
 			// New table
-			if err := m.generateMigrationFile(modelName, schema, indexes, true); err != nil {
+			if err := m.generateMigrationFile(timestamp, modelName, schema, indexes, true); err != nil {
 				return err
 			}
 			m.snapshots = append(m.snapshots, &modelSnapshot{
@@ -147,7 +157,7 @@ func (m *migrator) Generate() error {
 			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
 			if len(upStatements) > 0 {
 				// Only generate migration file when there are actual changes
-				if err := m.generateMigrationFile(modelName, schema, indexes, false); err != nil {
+				if err := m.generateMigrationFile(timestamp, modelName, schema, indexes, false); err != nil {
 					return err
 				}
 				snapshot.Hash = newHash
@@ -248,8 +258,7 @@ func (m *migrator) generateHash(schema string, indexes []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (m *migrator) generateMigrationFile(modelName string, schema string, indexes []string, isNew bool) error {
-	timestamp := time.Now().Format("20060102150405")
+func (m *migrator) generateMigrationFile(timestamp int64, modelName string, schema string, indexes []string, isNew bool) error {
 	var filename string
 	var content string
 
@@ -257,18 +266,18 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 		// Case of new table
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%s_create_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
 			content = schema + "\n" + joinStrings(indexes, "\n")
 		case Goose:
-			filename = fmt.Sprintf("%s_create_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
 			content = fmt.Sprintf("-- +goose Up\n%s\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
 				schema, joinStrings(indexes, "\n"), modelName)
 		case GolangMigrate:
-			filename = fmt.Sprintf("%s_create_%s.up.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, modelName)
 			content = schema + "\n" + joinStrings(indexes, "\n")
 
 			downContent := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
-			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%s_create_%s.down.sql", timestamp, modelName))
+			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%d_create_%s.down.sql", timestamp, modelName))
 			if err := os.WriteFile(downFile, []byte(downContent), 0644); err != nil {
 				return err
 			}
@@ -278,18 +287,18 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 		upStatements, downStatements := m.generateAlterStatements(modelName, schema, indexes)
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%s_alter_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, modelName)
 			content = joinStrings(upStatements, "\n")
 		case Goose:
-			filename = fmt.Sprintf("%s_alter_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, modelName)
 			content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\n%s\n",
 				joinStrings(upStatements, "\n"),
 				joinStrings(downStatements, "\n"))
 		case GolangMigrate:
-			filename = fmt.Sprintf("%s_alter_%s.up.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, modelName)
 			content = joinStrings(upStatements, "\n")
 
-			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%s_alter_%s.down.sql", timestamp, modelName))
+			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%d_alter_%s.down.sql", timestamp, modelName))
 			if err := os.WriteFile(downFile, []byte(joinStrings(downStatements, "\n")), 0644); err != nil {
 				return err
 			}
