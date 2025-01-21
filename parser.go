@@ -121,8 +121,28 @@ func parseModelToSQL(model interface{}) string {
 func parseModelToSQLWithIndexes(model interface{}) (string, []string) {
 	tableName, columns, indexes := parseModel(model)
 
+	// 檢查是否有主鍵字段
+	hasPrimaryKey := false
+	t := reflect.TypeOf(model)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if hasTag(field, "primaryKey") {
+			hasPrimaryKey = true
+			break
+		}
+	}
+
+	// 如果有主鍵，添加 PRIMARY KEY 約束
+	if hasPrimaryKey {
+		columns = append(columns, "PRIMARY KEY (`id`)")
+	}
+
 	// 生成 CREATE TABLE 語句
-	createTable := fmt.Sprintf("CREATE TABLE %s (\n  %s\n);",
+	createTable := fmt.Sprintf("CREATE TABLE `%s` (\n  %s\n);",
 		tableName,
 		strings.Join(columns, ",\n  "))
 
@@ -131,12 +151,12 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string) {
 	for _, idx := range indexes {
 		if idx.IsUnique {
 			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s);",
-					idx.Name, tableName, strings.Join(idx.Columns, ", ")))
+				fmt.Sprintf("CREATE UNIQUE INDEX %s ON `%s` (`%s`);",
+					idx.Name, tableName, strings.Join(idx.Columns, "`, `")))
 		} else {
 			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE INDEX %s ON %s (%s);",
-					idx.Name, tableName, strings.Join(idx.Columns, ", ")))
+				fmt.Sprintf("CREATE INDEX %s ON `%s` (`%s`);",
+					idx.Name, tableName, strings.Join(idx.Columns, "`, `")))
 		}
 	}
 
@@ -158,9 +178,6 @@ func parseField(field reflect.StructField) string {
 	var constraints []string
 
 	// 按照固定順序添加約束
-	if hasTag(field, "primaryKey") {
-		constraints = append(constraints, "PRIMARY KEY")
-	}
 	if hasTag(field, "autoIncrement") {
 		constraints = append(constraints, "AUTO_INCREMENT")
 	}
@@ -192,9 +209,9 @@ func parseField(field reflect.StructField) string {
 	}
 
 	if len(constraints) > 0 {
-		return fmt.Sprintf("%s %s %s", columnName, sqlType, strings.Join(constraints, " "))
+		return fmt.Sprintf("`%s` %s %s", columnName, sqlType, strings.Join(constraints, " "))
 	}
-	return fmt.Sprintf("%s %s", columnName, sqlType)
+	return fmt.Sprintf("`%s` %s", columnName, sqlType)
 }
 
 // parseEmbeddedField 解析嵌入字段
@@ -210,9 +227,12 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 		column := parseField(field)
 		if column != "" {
 			if prefix != "" {
-				// 添加前綴到列名
+				// 添加前綴到列名，並確保反引號的正確位置
 				parts := strings.SplitN(column, " ", 2)
-				column = prefix + parts[0] + " " + parts[1]
+				// 移除原本的反引號
+				columnName := strings.Trim(parts[0], "`")
+				// 加上前綴並重新添加反引號
+				column = fmt.Sprintf("`%s%s` %s", prefix, columnName, parts[1])
 			}
 			columns = append(columns, column)
 		}

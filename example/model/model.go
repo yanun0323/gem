@@ -19,7 +19,7 @@ type Model struct {
 	Email       string    `gorm:"column:email;size:255;uniqueIndex:udx_email_score_is_active"`
 	Score       float64   `gorm:"column:score;precision:10;scale:2;default:0.00;uniqueIndex:udx_email_score_is_active"`
 	IsActive    bool      `gorm:"column:is_active;default:true;uniqueIndex:udx_email_score_is_active"`
-	Birthday    time.Time `gorm:"column:birthday;type:date"`
+	Birthday    time.Time `gorm:"column:birth_day;type:date"`
 	Description string    `gorm:"column:description;type:text;comment:使用者備註"`
 
 	// JSON 序列化

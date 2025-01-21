@@ -1,7 +1,6 @@
 package gem
 
 import (
-	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -37,8 +36,9 @@ type migrator struct {
 }
 
 type MigratorConfig struct {
-	Format    MigrationTool
-	ExportDir string
+	Format            MigrationTool
+	ExportDir         string
+	KeepDroppedColumn bool
 }
 
 type columnDef struct {
@@ -205,7 +205,7 @@ func (m *migrator) generateAlterStatements(tableName string, newSchema string, n
 	}
 
 	// 比較欄位差異
-	columnOps := compareColumns(oldDef.Columns, newDef.Columns)
+	columnOps := m.compareColumns(oldDef.Columns, newDef.Columns)
 	for _, op := range columnOps {
 		if op.Up != "" {
 			upStatements = append(upStatements, op.Up)
@@ -256,7 +256,7 @@ func joinStrings(str []string, sep string) string {
 	return result
 }
 
-func (m *migrator) Run(ctx context.Context) error {
+func (m *migrator) Run() error {
 	if err := os.MkdirAll(m.conf.ExportDir, 0755); err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	sql = strings.TrimSpace(sql)
 
 	// 解析表名
-	tableNameRegex := regexp.MustCompile(`CREATE TABLE (\w+) \(([\s\S]+)\);`)
+	tableNameRegex := regexp.MustCompile(`CREATE TABLE ` + "`" + `(\w+)` + "`" + ` \(([\s\S]+)\);`)
 	matches := tableNameRegex.FindStringSubmatch(sql)
 	if len(matches) != 3 {
 		return nil, fmt.Errorf("invalid CREATE TABLE syntax")
@@ -331,27 +331,62 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	columnsStr := matches[2]
 
 	// 分割欄位定義
-	columnDefs := strings.Split(columnsStr, ",")
-	columns := make([]columnDef, 0)
+	var columns []columnDef
+	var currentColumn string
+	var inParentheses int
 
-	for _, colStr := range columnDefs {
-		colStr = strings.TrimSpace(colStr)
-		if colStr == "" {
+	// 按行分割並處理每一行
+	lines := strings.Split(columnsStr, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
 
-		// 解析欄位定義
-		parts := strings.Fields(colStr)
-		if len(parts) < 2 {
-			continue
+		// 計算括號
+		for _, char := range line {
+			if char == '(' {
+				inParentheses++
+			} else if char == ')' {
+				inParentheses--
+			}
 		}
 
-		col := columnDef{
-			Name:        parts[0],
-			Type:        parts[1],
-			Constraints: parts[2:],
+		// 如果當前行不是完整的定義，則繼續累積
+		if currentColumn != "" {
+			currentColumn += " " + line
+		} else {
+			currentColumn = line
 		}
-		columns = append(columns, col)
+
+		// 如果括號已經配對完成，且當前行以逗號結尾或是最後一行
+		if inParentheses == 0 && (strings.HasSuffix(line, ",") || !strings.Contains(columnsStr[len(currentColumn):], ",")) {
+			// 移除尾部的逗號
+			currentColumn = strings.TrimSuffix(currentColumn, ",")
+
+			// 解析欄位定義
+			parts := strings.Fields(currentColumn)
+			if len(parts) < 2 {
+				continue
+			}
+
+			// 移除欄位名稱的反引號
+			columnName := strings.Trim(parts[0], "`")
+
+			// 特殊處理 PRIMARY KEY 定義
+			if strings.ToUpper(parts[0]) == "PRIMARY" && strings.ToUpper(parts[1]) == "KEY" {
+				currentColumn = ""
+				continue
+			}
+
+			col := columnDef{
+				Name:        columnName,
+				Type:        parts[1],
+				Constraints: parts[2:],
+			}
+			columns = append(columns, col)
+			currentColumn = ""
+		}
 	}
 
 	return &tableDef{
@@ -429,7 +464,7 @@ func removeDuplicates(elements []string) []string {
 }
 
 // compareColumns 比較兩個欄位定義的差異
-func compareColumns(oldCols, newCols []columnDef) []alterOperation {
+func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation {
 	var operations []alterOperation
 	oldColMap := make(map[string]columnDef)
 	newColMap := make(map[string]columnDef)
@@ -448,18 +483,18 @@ func compareColumns(oldCols, newCols []columnDef) []alterOperation {
 		if !exists {
 			// 新增欄位
 			operations = append(operations, alterOperation{
-				Up: fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s %s;",
+				Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
 					name, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
-				Down: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;",
+				Down: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
 					name, newCol.Name),
 			})
 		} else {
 			// 比較欄位定義是否有變更
 			if !compareColumnDef(oldCol, newCol) {
 				operations = append(operations, alterOperation{
-					Up: fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s %s;",
+					Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
 						name, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
-					Down: fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s %s;",
+					Down: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
 						name, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
 				})
 			}
@@ -467,14 +502,16 @@ func compareColumns(oldCols, newCols []columnDef) []alterOperation {
 	}
 
 	// 檢查刪除的欄位
-	for name, oldCol := range oldColMap {
-		if _, exists := newColMap[name]; !exists {
-			operations = append(operations, alterOperation{
-				Up: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;",
-					name, oldCol.Name),
-				Down: fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s %s;",
-					name, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
-			})
+	if !m.conf.KeepDroppedColumn {
+		for name, oldCol := range oldColMap {
+			if _, exists := newColMap[name]; !exists {
+				operations = append(operations, alterOperation{
+					Up: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
+						name, oldCol.Name),
+					Down: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
+						name, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+				})
+			}
 		}
 	}
 
