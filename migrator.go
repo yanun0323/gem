@@ -40,11 +40,11 @@ type Config struct {
 	// Default: RawSQL
 	Tool MigrationTool
 
-	// ExportDir specifies the directory path where migration files will be stored.
+	// OutputPath specifies the directory path where migration files will be stored.
 	// The path can be either absolute or relative to the current working directory.
 	//
 	// Default: ./migrations
-	ExportDir string
+	OutputPath string
 
 	// KeepDroppedColumn determines whether to preserve dropped columns in down migrations.
 	// When set to true, dropped columns will be restored in down migrations.
@@ -55,11 +55,11 @@ type Config struct {
 }
 
 func (c *Config) getExportDir() string {
-	if len(c.ExportDir) == 0 {
+	if len(c.OutputPath) == 0 {
 		return "." + string(os.PathSeparator) + "migrations"
 	}
 
-	return c.ExportDir
+	return c.OutputPath
 }
 
 type migrator struct {

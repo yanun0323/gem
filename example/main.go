@@ -11,7 +11,7 @@ func main() {
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.Goose,
-			ExportDir:         "./example/export/goose",
+			OutputPath:        "./example/export/goose",
 			KeepDroppedColumn: true,
 		})
 
@@ -28,7 +28,7 @@ func main() {
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.GolangMigrate,
-			ExportDir:         "./example/export/go_migrate",
+			OutputPath:        "./example/export/go_migrate",
 			KeepDroppedColumn: true,
 		})
 

@@ -46,7 +46,7 @@ type User struct {
 func main() {
     g := gem.New(&gem.Config{
         Tool:    gem.Goose,        // or gem.GolangMigrate, gem.RawSQL
-        ExportDir: "./migrations",
+        OutputPath: "./migrations",
         KeepDroppedColumn: false,
     })
 
@@ -63,7 +63,7 @@ func main() {
 ```go
 type Config struct {
     Tool              MigrationTool // Goose, GolangMigrate, or RawSQL
-    ExportDir         string        // Directory to store migration files
+    OutputPath         string       // Directory to store migration files
     KeepDroppedColumn bool          // Keep dropped columns in down migrations
 }
 ```
