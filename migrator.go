@@ -28,8 +28,8 @@ const (
 	GolangMigrate
 )
 
-// MigratorConfig defines the configuration options for the database schema migration generator.
-type MigratorConfig struct {
+// Config defines the configuration options for the database schema migration generator.
+type Config struct {
 	// Tool specifies which migration tool format to use for generating migration files.
 	// Available options are:
 	// - RawSQL: Plain SQL files
@@ -51,21 +51,9 @@ type MigratorConfig struct {
 	//
 	// Default: false
 	KeepDroppedColumn bool
-
-	// IndexPrefix defines the prefix string used for regular (non-unique) index names.
-	// This helps in maintaining consistent naming conventions for database indexes.
-	//
-	// Default: idx_
-	IndexPrefix string
-
-	// UniqueIndexPrefix defines the prefix string used for unique index names.
-	// This helps in maintaining consistent naming conventions for unique indexes.
-	//
-	// Default: udx_
-	UniqueIndexPrefix string
 }
 
-func (c *MigratorConfig) getExportDir() string {
+func (c *Config) getExportDir() string {
 	if len(c.ExportDir) == 0 {
 		return "." + string(os.PathSeparator) + "migrations"
 	}
@@ -73,31 +61,15 @@ func (c *MigratorConfig) getExportDir() string {
 	return c.ExportDir
 }
 
-func (c *MigratorConfig) idx() string {
-	if len(c.IndexPrefix) == 0 {
-		return "idx_"
-	}
-
-	return c.IndexPrefix
-}
-
-func (c *MigratorConfig) udx() string {
-	if len(c.UniqueIndexPrefix) == 0 {
-		return "udx_"
-	}
-
-	return c.UniqueIndexPrefix
-}
-
 type migrator struct {
-	conf      *MigratorConfig
+	conf      *Config
 	models    []interface{}
 	snapshots []*modelSnapshot
 }
 
 // New creates a new migrator instance with the given configuration.
 // If config is nil, default configuration values will be used.
-func New(config *MigratorConfig) *migrator {
+func New(config *Config) *migrator {
 	return &migrator{
 		conf:      config,
 		models:    make([]interface{}, 0),
@@ -105,15 +77,15 @@ func New(config *MigratorConfig) *migrator {
 	}
 }
 
-// Model adds one or more models to the migrator for schema migration generation.
+// AddModels adds one or more models to the migrator for schema migration generation.
 // The models should be struct types that represent database tables.
 // Returns the migrator instance for method chaining.
-func (m *migrator) Model(models ...interface{}) *migrator {
+func (m *migrator) AddModels(models ...interface{}) *migrator {
 	m.models = append(m.models, models...)
 	return m
 }
 
-// Run executes the migration generation process for all added models.
+// Generate executes the migration generation process for all added models.
 // It performs the following steps:
 // 1. Creates necessary directories for migration files
 // 2. Loads existing snapshots if any
@@ -126,7 +98,7 @@ func (m *migrator) Model(models ...interface{}) *migrator {
 // 4. Saves updated snapshots
 //
 // Returns an error if any step fails during the process.
-func (m *migrator) Run() error {
+func (m *migrator) Generate() error {
 	if err := os.MkdirAll(m.conf.getExportDir(), 0755); err != nil {
 		return err
 	}
@@ -140,7 +112,7 @@ func (m *migrator) Run() error {
 	}
 
 	for _, model := range m.models {
-		schema, indexes, err := parseModelToSQLWithIndexes(model, m.conf)
+		schema, indexes, err := parseModelToSQLWithIndexes(model)
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
 		}
@@ -151,7 +123,7 @@ func (m *migrator) Run() error {
 		}
 		modelName := toSnakeCase(t.Name())
 
-		// 如果是可命名的接口，使用指定的表名
+		// If it's a nameable interface, use the specified table name
 		if nameable, ok := model.(nameable); ok {
 			modelName = nameable.TableName()
 		}
@@ -160,7 +132,7 @@ func (m *migrator) Run() error {
 		snapshot := m.findSnapshot(modelName)
 
 		if snapshot == nil {
-			// 新表
+			// New table
 			if err := m.generateMigrationFile(modelName, schema, indexes, true); err != nil {
 				return err
 			}
@@ -171,10 +143,10 @@ func (m *migrator) Run() error {
 				Indexes: indexes,
 			})
 		} else if snapshot.Hash != newHash {
-			// 檢查是否有實際變動
+			// Check if there are actual changes
 			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
 			if len(upStatements) > 0 {
-				// 只有在有實際變動時才生成遷移文件
+				// Only generate migration file when there are actual changes
 				if err := m.generateMigrationFile(modelName, schema, indexes, false); err != nil {
 					return err
 				}
@@ -207,7 +179,7 @@ type tableDef struct {
 	Indexes []string
 }
 
-// alterOperation 定義一個變更操作
+// alterOperation defines a change operation
 type alterOperation struct {
 	Up   string
 	Down string
@@ -221,7 +193,7 @@ type indexDef struct {
 }
 
 func (idx *indexDef) ToSQL() string {
-	// 確保沒有重複的欄位
+	// Ensure no duplicate columns
 	idx.Columns = removeDuplicates(idx.Columns)
 
 	if idx.IsUnique {
@@ -282,7 +254,7 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 	var content string
 
 	if isNew {
-		// 新表的情況
+		// Case of new table
 		switch m.conf.Tool {
 		case RawSQL:
 			filename = fmt.Sprintf("%s_create_%s.sql", timestamp, modelName)
@@ -302,7 +274,7 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 			}
 		}
 	} else {
-		// 修改表的情況
+		// Case of table modification
 		upStatements, downStatements := m.generateAlterStatements(modelName, schema, indexes)
 		switch m.conf.Tool {
 		case RawSQL:
@@ -328,16 +300,16 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 }
 
 func (m *migrator) generateAlterStatements(tableName string, newSchema string, newIndexes []string) (upStatements []string, downStatements []string) {
-	// 解析新的 schema
+	// Parse new schema
 	newDef, err := parseCreateTable(newSchema)
 	if err != nil {
 		return []string{fmt.Sprintf("-- Error parsing new schema: %v", err)}, nil
 	}
 
-	// 從快照中獲取舊的 schema
+	// Get old schema from snapshot
 	snapshot := m.findSnapshot(tableName)
 	if snapshot == nil {
-		return []string{fmt.Sprintf("-- 無法找到表 %s 的快照", tableName)}, nil
+		return []string{fmt.Sprintf("-- Unable to find snapshot for table %s", tableName)}, nil
 	}
 
 	oldDef, err := parseCreateTable(snapshot.Schema)
@@ -345,7 +317,7 @@ func (m *migrator) generateAlterStatements(tableName string, newSchema string, n
 		return []string{fmt.Sprintf("-- Error parsing old schema: %v", err)}, nil
 	}
 
-	// 比較欄位差異
+	// Compare column differences
 	columnOps := m.compareColumns(oldDef.Columns, newDef.Columns)
 	for _, op := range columnOps {
 		if op.Up != "" {
@@ -356,7 +328,7 @@ func (m *migrator) generateAlterStatements(tableName string, newSchema string, n
 		}
 	}
 
-	// 比較索引差異
+	// Compare index differences
 	indexOps := compareIndexes(snapshot.Indexes, newIndexes)
 	for _, op := range indexOps {
 		if op.Up != "" {
@@ -397,12 +369,12 @@ func joinStrings(str []string, sep string) string {
 	return result
 }
 
-// parseCreateTable 解析 CREATE TABLE 語句
+// parseCreateTable parses CREATE TABLE statement
 func parseCreateTable(sql string) (*tableDef, error) {
-	// 移除多餘的空白和換行
+	// Remove extra whitespace and newlines
 	sql = strings.TrimSpace(sql)
 
-	// 解析表名
+	// Parse table name
 	tableNameRegex := regexp.MustCompile(`CREATE TABLE ` + "`" + `(\w+)` + "`" + ` \(([\s\S]+)\);`)
 	matches := tableNameRegex.FindStringSubmatch(sql)
 	if len(matches) != 3 {
@@ -412,12 +384,12 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	tableName := matches[1]
 	columnsStr := matches[2]
 
-	// 分割欄位定義
+	// Split column definitions
 	var columns []columnDef
 	var currentColumn string
 	var inParentheses int
 
-	// 按行分割並處理每一行
+	// Split by lines and process each line
 	lines := strings.Split(columnsStr, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -425,7 +397,7 @@ func parseCreateTable(sql string) (*tableDef, error) {
 			continue
 		}
 
-		// 計算括號
+		// Calculate brackets
 		for _, char := range line {
 			if char == '(' {
 				inParentheses++
@@ -434,28 +406,28 @@ func parseCreateTable(sql string) (*tableDef, error) {
 			}
 		}
 
-		// 如果當前行不是完整的定義，則繼續累積
+		// If current line is not a complete definition, continue accumulating
 		if currentColumn != "" {
 			currentColumn += " " + line
 		} else {
 			currentColumn = line
 		}
 
-		// 如果括號已經配對完成，且當前行以逗號結尾或是最後一行
+		// If brackets are paired and current line ends with comma or is the last line
 		if inParentheses == 0 && (strings.HasSuffix(line, ",") || !strings.Contains(columnsStr[len(currentColumn):], ",")) {
-			// 移除尾部的逗號
+			// Remove trailing comma
 			currentColumn = strings.TrimSuffix(currentColumn, ",")
 
-			// 解析欄位定義
+			// Parse column definition
 			parts := strings.Fields(currentColumn)
 			if len(parts) < 2 {
 				continue
 			}
 
-			// 移除欄位名稱的反引號
+			// Remove backticks from column name
 			columnName := strings.Trim(parts[0], "`")
 
-			// 特殊處理 PRIMARY KEY 定義
+			// Special handling for PRIMARY KEY definition
 			if strings.ToUpper(parts[0]) == "PRIMARY" && strings.ToUpper(parts[1]) == "KEY" {
 				currentColumn = ""
 				continue
@@ -477,11 +449,11 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	}, nil
 }
 
-// parseIndexes 解析索引定義
+// parseIndexes parses index definitions
 func parseIndexes(indexes []string) map[string]*indexDef {
 	result := make(map[string]*indexDef)
 	for _, idx := range indexes {
-		// 解析 CREATE INDEX 語句
+		// Parse CREATE INDEX statement
 		parts := strings.Fields(idx)
 		if len(parts) < 6 { // CREATE [UNIQUE] INDEX name ON table (columns)
 			continue
@@ -496,22 +468,22 @@ func parseIndexes(indexes []string) map[string]*indexDef {
 		name := parts[startIdx]
 		tableName := parts[startIdx+2]
 
-		// 提取列名，處理括號內的內容
+		// Extract column names, handle content inside brackets
 		columnsStr := idx[strings.Index(idx, "(")+1 : strings.LastIndex(idx, ")")]
 		columns := strings.Split(columnsStr, ",")
 		for i := range columns {
 			columns[i] = strings.TrimSpace(columns[i])
 		}
 
-		// 移除可能存在的多餘分號
+		// Remove possible extra semicolons
 		for i := range columns {
 			columns[i] = strings.TrimSuffix(columns[i], ";")
 			columns[i] = strings.TrimSuffix(columns[i], ");")
 		}
 
-		// 如果索引名稱以 "idx_" 開頭且重複，則為複合索引的一部分
+		// If index name starts with "idx_" and is duplicate, it's part of a composite index
 		if existingIdx, ok := result[name]; ok {
-			// 合併欄位到現有索引
+			// Merge columns into existing index
 			existingIdx.Columns = append(existingIdx.Columns, columns...)
 		} else {
 			result[name] = &indexDef{
@@ -523,7 +495,7 @@ func parseIndexes(indexes []string) map[string]*indexDef {
 		}
 	}
 
-	// 清理重複的欄位
+	// Clean up duplicate columns
 	for _, idx := range result {
 		idx.Columns = removeDuplicates(idx.Columns)
 	}
@@ -531,7 +503,7 @@ func parseIndexes(indexes []string) map[string]*indexDef {
 	return result
 }
 
-// removeDuplicates 移除重複的欄位名稱
+// removeDuplicates removes duplicate column names
 func removeDuplicates(elements []string) []string {
 	seen := make(map[string]bool)
 	result := make([]string, 0)
@@ -545,13 +517,13 @@ func removeDuplicates(elements []string) []string {
 	return result
 }
 
-// compareColumns 比較兩個欄位定義的差異
+// compareColumns compares differences between two column definitions
 func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation {
 	var operations []alterOperation
 	oldColMap := make(map[string]columnDef)
 	newColMap := make(map[string]columnDef)
 
-	// 建立欄位映射
+	// Build column mapping
 	for _, col := range oldCols {
 		oldColMap[col.Name] = col
 	}
@@ -559,11 +531,11 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 		newColMap[col.Name] = col
 	}
 
-	// 檢查新增和修改的欄位
+	// Check added and modified columns
 	for name, newCol := range newColMap {
 		oldCol, exists := oldColMap[name]
 		if !exists {
-			// 新增欄位
+			// New columns
 			operations = append(operations, alterOperation{
 				Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
 					name, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
@@ -571,7 +543,7 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 					name, newCol.Name),
 			})
 		} else {
-			// 比較欄位定義是否有變更
+			// Compare if column definition has changes
 			if !compareColumnDef(oldCol, newCol) {
 				operations = append(operations, alterOperation{
 					Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
@@ -583,7 +555,7 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 		}
 	}
 
-	// 檢查刪除的欄位
+	// Check deleted columns
 	if !m.conf.KeepDroppedColumn {
 		for name, oldCol := range oldColMap {
 			if _, exists := newColMap[name]; !exists {
@@ -600,7 +572,7 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 	return operations
 }
 
-// compareColumnDef 比較兩個欄位的定義是否相同
+// compareColumnDef compares if two column definitions are the same
 func compareColumnDef(old, new columnDef) bool {
 	if old.Type != new.Type {
 		return false
@@ -616,23 +588,23 @@ func compareColumnDef(old, new columnDef) bool {
 	return true
 }
 
-// compareIndexes 比較索引的差異
+// compareIndexes compares index differences
 func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 	var operations []alterOperation
 	oldIndexMap := parseIndexes(oldIndexes)
 	newIndexMap := parseIndexes(newIndexes)
 
-	// 檢查新增和修改的索引
+	// Check added and modified indexes
 	for name, newIdx := range newIndexMap {
 		oldIdx, exists := oldIndexMap[name]
 		if !exists {
-			// 新增索引
+			// New indexes
 			operations = append(operations, alterOperation{
 				Up:   newIdx.ToSQL(),
 				Down: fmt.Sprintf("DROP INDEX %s;", name),
 			})
 		} else {
-			// 比較索引定義是否有變更
+			// Compare if index definition has changes
 			if !compareIndexDef(oldIdx, newIdx) {
 				operations = append(operations, alterOperation{
 					Up: fmt.Sprintf("DROP INDEX %s;\n%s",
@@ -644,7 +616,7 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 		}
 	}
 
-	// 檢查刪除的索引
+	// Check deleted indexes
 	for name, oldIdx := range oldIndexMap {
 		if _, exists := newIndexMap[name]; !exists {
 			operations = append(operations, alterOperation{
@@ -657,7 +629,7 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 	return operations
 }
 
-// compareIndexDef 比較兩個索引的定義是否相同
+// compareIndexDef compares if two index definitions are the same
 func compareIndexDef(old, new *indexDef) bool {
 	if old.IsUnique != new.IsUnique {
 		return false
@@ -666,7 +638,7 @@ func compareIndexDef(old, new *indexDef) bool {
 		return false
 	}
 
-	// 將欄位排序後比較，確保順序不影響比較結果
+	// Sort columns before comparison to ensure order doesn't affect comparison
 	oldCols := make([]string, len(old.Columns))
 	newCols := make([]string, len(new.Columns))
 	copy(oldCols, old.Columns)
@@ -683,13 +655,13 @@ func compareIndexDef(old, new *indexDef) bool {
 	return true
 }
 
-// normalizeIndex 正規化索引定義
+// normalizeIndex normalizes index definition
 func normalizeIndex(idx string) string {
-	// 移除多餘的空白和換行
+	// Remove extra whitespace and newlines
 	return strings.Join(strings.Fields(idx), " ")
 }
 
-// extractIndexName 從索引定義中提取索引名稱
+// extractIndexName extracts index name from index definition
 func extractIndexName(idx string) string {
 	parts := strings.Fields(idx)
 	startIdx := 2

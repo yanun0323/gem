@@ -44,17 +44,15 @@ type User struct {
 }
 
 func main() {
-    migrator := gem.New(&gem.MigratorConfig{
+    g := gem.New(&gem.Config{
         Format:    gem.Goose,        // or gem.GolangMigrate, gem.RawSQL
         ExportDir: "./migrations",
         KeepDroppedColumn: false,
-        IndexPrefix: "idx_",
-        UniqueIndexPrefix: "udx_",
     })
 
-    migrator.Model(User{})
+    g.AddModels(User{})
 
-    if err := migrator.Run(); err != nil {
+    if err := g.Generate(); err != nil {
         log.Fatal(err)
     }
 }
@@ -63,12 +61,10 @@ func main() {
 ### Configuration Options
 
 ```go
-type MigratorConfig struct {
+type Config struct {
     Format            MigrationTool // Goose, GoMigrate, or RawSQL
     ExportDir         string        // Directory to store migration files
     KeepDroppedColumn bool          // Keep dropped columns in down migrations
-    IndexPrefix       string        // Prefix of the index name
-    UniqueIndexPrefix string        // Prefix of the unique index name
 }
 ```
 

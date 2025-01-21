@@ -5,27 +5,34 @@ import (
 	"time"
 )
 
-// Model 是一個用於測試所有 GORM tag 功能的結構體
+// Model is a struct for testing all GORM tag features
+// Basic fields and primary key
+// Various data types and constraints
+// JSON serialization
+// Read and write permission control
+// Embedded structure
+// Nullable fields
+// Address is an embedded sub-struct
 type Model struct {
-	// 基本欄位和主鍵
+	// Basic fields and primary key
 	ID        uint      `gorm:"column:id;primaryKey;autoIncrement;autoIncrementIncrement:2"`
 	UUID      string    `gorm:"column:uuid;type:varchar(36);unique;not null"`
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt int64     `gorm:"column:updated_at;type:bigint;autoUpdateTime"`
 
-	// 各種數據類型和約束
+	// Various data types and constraints
 	Name        string    `gorm:"column:name;type:varchar(100);not null;uniqueIndex"`
 	Age         int       `gorm:"column:age;check:age > 0"`
 	Email       string    `gorm:"column:email;size:255;uniqueIndex:udx_email_score_is_active"`
 	Score       float64   `gorm:"column:score;precision:10;scale:2;default:0.00;uniqueIndex:udx_email_score_is_active"`
 	IsActive    bool      `gorm:"column:is_active;default:true;uniqueIndex:udx_email_score_is_active"`
 	Birthday    time.Time `gorm:"column:birth_day;type:date;index"`
-	Description string    `gorm:"column:description;type:text;comment:使用者備註"`
+	Description string    `gorm:"column:description;type:text;comment:User notes"`
 
-	// JSON 序列化
+	// JSON serialization
 	Settings map[string]interface{} `gorm:"column:settings;serializer:json"`
 
-	// 唯讀和寫入權限控制
+	// Read and write permission control
 	ReadOnly   string `gorm:"column:read_only;->"`
 	WriteOnly  string `gorm:"column:write_only;<-"`
 	CreateOnly string `gorm:"column:create_only;<-:create"`
@@ -33,10 +40,10 @@ type Model struct {
 	Ignored    string `gorm:"-"`
 	NoMigrate  string `gorm:"-:migration"`
 
-	// 嵌入結構
+	// Embedded structure
 	Address Address `gorm:"embedded;embeddedPrefix:addr_"`
 
-	// 可為空的欄位
+	// Nullable fields
 	DeletedAt    sql.NullTime   `gorm:"column:deleted_at;index:idx_deleted_at_new"`
 	OptionalData sql.NullString `gorm:"column:optional_data"`
 }
@@ -45,7 +52,7 @@ func (Model) TableName() string {
 	return "models"
 }
 
-// Address 是嵌入的子結構體
+// Address is an embedded sub-struct
 type Address struct {
 	Street  string `gorm:"column:street;type:varchar(255);uniqueIndex:udx_address_street_city_country"`
 	City    string `gorm:"column:city;type:varchar(100);uniqueIndex:udx_address_street_city_country"`

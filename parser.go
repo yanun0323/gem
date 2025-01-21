@@ -18,9 +18,10 @@ type indexInfo struct {
 	IsUnique bool
 }
 
-// parseModel 解析 GORM model 結構體
-func parseModel(model interface{}, conf *MigratorConfig) (tableName string, columns []string, indexes map[string]*indexInfo) {
-	// 獲取結構體的反射類型
+// parseModel parses GORM model struct
+// Get the reflection type of the struct
+func parseModel(model interface{}) (tableName string, columns []string, indexes map[string]*indexInfo) {
+	// Get the reflection type of the struct
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -34,16 +35,24 @@ func parseModel(model interface{}, conf *MigratorConfig) (tableName string, colu
 	columns = make([]string, 0)
 	indexes = make(map[string]*indexInfo)
 
-	// 遍歷所有字段
+	// Iterate through all fields
+	// Ignore unexported fields
+	// Handle embedded fields
+	// Handle indexes
+	// If there's only an index tag without value, create a single-column index
+	// If there's a specified index name, it might be part of a composite index
+	// Handle unique indexes
+	// If there's only a uniqueIndex tag without value, create a single-column unique index
+	// If there's a specified index name, it might be part of a composite index
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 
-		// 忽略未導出的字段
+		// Ignore unexported fields
 		if !field.IsExported() {
 			continue
 		}
 
-		// 處理嵌入字段
+		// Handle embedded fields
 		if field.Anonymous || hasTag(field, "embedded") {
 			embeddedPrefix := getTagValue(field, "embeddedPrefix")
 			columns = append(columns, parseEmbeddedField(field.Type, embeddedPrefix)...)
@@ -55,19 +64,19 @@ func parseModel(model interface{}, conf *MigratorConfig) (tableName string, colu
 			columns = append(columns, column)
 		}
 
-		// 處理索引
+		// Handle indexes
 		if hasTag(field, "index") {
 			indexName := getTagValue(field, "index")
 			if indexName == "" {
-				// 如果只有 index 標記但沒有值，創建單欄位索引
-				indexName = fmt.Sprintf("%s%s", conf.idx(), toSnakeCase(field.Name))
+				// If there's only index tag without value, create a single-column index
+				indexName = fmt.Sprintf("idx_%s", toSnakeCase(field.Name))
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
 					Columns:  []string{toSnakeCase(field.Name)},
 					IsUnique: false,
 				}
 			} else {
-				// 如果有指定索引名稱，可能是複合索引的一部分
+				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
 					idx.Columns = append(idx.Columns, toSnakeCase(field.Name))
 				} else {
@@ -80,19 +89,19 @@ func parseModel(model interface{}, conf *MigratorConfig) (tableName string, colu
 			}
 		}
 
-		// 處理唯一索引
+		// Handle unique indexes
 		if hasTag(field, "uniqueIndex") {
 			indexName := getTagValue(field, "uniqueIndex")
 			if indexName == "" {
-				// 如果只有 uniqueIndex 標記但沒有值，創建單欄位唯一索引
-				indexName = fmt.Sprintf("%s%s", conf.udx(), toSnakeCase(field.Name))
+				// If there's only uniqueIndex tag without value, create a single-column unique index
+				indexName = fmt.Sprintf("udx_%s", toSnakeCase(field.Name))
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
 					Columns:  []string{toSnakeCase(field.Name)},
 					IsUnique: true,
 				}
 			} else {
-				// 如果有指定索引名稱，可能是複合索引的一部分
+				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
 					idx.Columns = append(idx.Columns, toSnakeCase(field.Name))
 				} else {
@@ -109,11 +118,15 @@ func parseModel(model interface{}, conf *MigratorConfig) (tableName string, colu
 	return
 }
 
-// parseModelToSQLWithIndexes 解析模型並返回 CREATE TABLE 語句和索引定義
-func parseModelToSQLWithIndexes(model interface{}, conf *MigratorConfig) (string, []string, error) {
-	tableName, columns, indexes := parseModel(model, conf)
+// parseModelToSQLWithIndexes parses model and returns CREATE TABLE statement and index definitions
+// Check if there's a primary key field
+// If there's a primary key, add PRIMARY KEY constraint
+// Generate CREATE TABLE statement
+// Generate index statements
+func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
+	tableName, columns, indexes := parseModel(model)
 
-	// 檢查是否有主鍵字段
+	// Check if there's a primary key field
 	hasPrimaryKey := false
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -128,17 +141,17 @@ func parseModelToSQLWithIndexes(model interface{}, conf *MigratorConfig) (string
 		}
 	}
 
-	// 如果有主鍵，添加 PRIMARY KEY 約束
+	// If there's a primary key, add PRIMARY KEY constraint
 	if hasPrimaryKey {
 		columns = append(columns, "PRIMARY KEY (`id`)")
 	}
 
-	// 生成 CREATE TABLE 語句
+	// Generate CREATE TABLE statement
 	createTable := fmt.Sprintf("CREATE TABLE `%s` (\n  %s\n);",
 		tableName,
 		strings.Join(columns, ",\n  "))
 
-	// 生成索引語句
+	// Generate index statements
 	var indexStatements []string
 	for _, idx := range indexes {
 		if idx.IsUnique {
@@ -157,9 +170,16 @@ func parseModelToSQLWithIndexes(model interface{}, conf *MigratorConfig) (string
 	return createTable, indexStatements, nil
 }
 
-// parseField 解析單個字段
+// parseField parses a single field
+// If marked as "-", ignore this field
+// Add constraints in fixed order
+// Handle check constraint
+// Add NOT NULL constraint only for non-pointer types or explicitly marked as not null
+// Handle default value
+// Handle comment, use single quotes, no need for extra escaping
+// Remove leading and trailing quotes (if any)
 func parseField(field reflect.StructField) string {
-	// 如果標記為 "-" 則忽略該字段
+	// If marked as "-", ignore this field
 	if ignore := getTagValue(field, "-"); ignore == "all" || ignore == "migration" {
 		return ""
 	}
@@ -169,12 +189,12 @@ func parseField(field reflect.StructField) string {
 
 	var constraints []string
 
-	// 按照固定順序添加約束
+	// Add constraints in fixed order
 	if hasTag(field, "autoIncrement") {
 		constraints = append(constraints, "AUTO_INCREMENT")
 	}
 
-	// 處理 check 約束
+	// Handle check constraint
 	if check := getTagValue(field, "check"); check != "" {
 		constraints = append(constraints, fmt.Sprintf("CHECK (%s)", check))
 	}
@@ -183,19 +203,19 @@ func parseField(field reflect.StructField) string {
 		constraints = append(constraints, "UNIQUE")
 	}
 
-	// 只有非指標類型或明確標記為 not null 時才添加 NOT NULL 約束
+	// Add NOT NULL constraint only for non-pointer types or explicitly marked as not null
 	if hasTag(field, "not null") || (field.Type.Kind() != reflect.Ptr && !hasTag(field, "default")) {
 		constraints = append(constraints, "NOT NULL")
 	}
 
-	// 處理默認值
+	// Handle default value
 	if defaultValue := getTagValue(field, "default"); defaultValue != "" {
 		constraints = append(constraints, fmt.Sprintf("DEFAULT %s", defaultValue))
 	}
 
-	// 處理 comment，使用單引號，不需要額外轉義
+	// Handle comment, use single quotes, no need for extra escaping
 	if comment := getTagValue(field, "comment"); comment != "" {
-		// 移除首尾的引號（如果有的話）
+		// Remove leading and trailing quotes (if any)
 		comment = strings.Trim(comment, "'")
 		constraints = append(constraints, fmt.Sprintf("COMMENT '%s'", comment))
 	}
@@ -206,7 +226,10 @@ func parseField(field reflect.StructField) string {
 	return fmt.Sprintf("`%s` %s", columnName, sqlType)
 }
 
-// parseEmbeddedField 解析嵌入字段
+// parseEmbeddedField parses embedded fields
+// Add prefix to column name and ensure correct backtick placement
+// Remove original backticks
+// Add prefix and re-add backticks
 func parseEmbeddedField(t reflect.Type, prefix string) []string {
 	var columns []string
 
@@ -219,11 +242,11 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 		column := parseField(field)
 		if column != "" {
 			if prefix != "" {
-				// 添加前綴到列名，並確保反引號的正確位置
+				// Add prefix to column name and ensure correct backtick placement
 				parts := strings.SplitN(column, " ", 2)
-				// 移除原本的反引號
+				// Remove original backticks
 				columnName := strings.Trim(parts[0], "`")
-				// 加上前綴並重新添加反引號
+				// Add prefix and re-add backticks
 				column = fmt.Sprintf("`%s%s` %s", prefix, columnName, parts[1])
 			}
 			columns = append(columns, column)
@@ -233,19 +256,26 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 	return columns
 }
 
-// getSQLType 根據 Go 類型獲取對應的 SQL 類型
+// getSQLType gets corresponding SQL type based on Go type
+// Check if type is explicitly specified
+// If it's a pointer type and not primary key, add NULL constraint
+// Handle precision
+// Get size tag
+// Get base type
+// Handle special types
+// If it's a pointer type and not primary key, add NULL constraint
 func getSQLType(field reflect.StructField) string {
-	// 檢查是否有明確指定類型
+	// Check if type is explicitly specified
 	if sqlType := getTagValue(field, "type"); sqlType != "" {
 		sqlType = strings.ToUpper(sqlType)
-		// 如果是指標類型且不是主鍵，添加 NULL 約束
+		// If it's a pointer type and not primary key, add NULL constraint
 		if field.Type.Kind() == reflect.Ptr && !hasTag(field, "primaryKey") {
 			return sqlType + " NULL"
 		}
 		return sqlType
 	}
 
-	// 處理精度
+	// Handle precision
 	precision := getTagValue(field, "precision")
 	scale := getTagValue(field, "scale")
 	if precision != "" {
@@ -255,10 +285,10 @@ func getSQLType(field reflect.StructField) string {
 		return fmt.Sprintf("DECIMAL(%s)", precision)
 	}
 
-	// 獲取 size 標籤
+	// Get size tag
 	size := getTagValue(field, "size")
 
-	// 獲取基礎類型
+	// Get base type
 	fieldType := field.Type
 	isPtr := fieldType.Kind() == reflect.Ptr
 	if isPtr {
@@ -302,7 +332,7 @@ func getSQLType(field reflect.StructField) string {
 			sqlType = "VARCHAR(255)"
 		}
 	default:
-		// 處理特殊類型
+		// Handle special types
 		typeName := fieldType.String()
 		switch typeName {
 		case "time.Time":
@@ -314,7 +344,7 @@ func getSQLType(field reflect.StructField) string {
 		}
 	}
 
-	// 如果是指標類型且不是主鍵，添加 NULL 約束
+	// If it's a pointer type and not primary key, add NULL constraint
 	if isPtr && !hasTag(field, "primaryKey") {
 		return sqlType + " NULL"
 	}
@@ -322,14 +352,13 @@ func getSQLType(field reflect.StructField) string {
 	return sqlType
 }
 
-// 工具函數
-
+// Utility functions
 func toSnakeCase(s string) string {
 	var result strings.Builder
 	for i, r := range s {
-		// 特殊處理連續的大寫字母
+		// Special handling for consecutive uppercase letters
 		if i > 0 && r >= 'A' && r <= 'Z' {
-			// 檢查前一個字符是否為小寫或後一個字符是否為小寫
+			// Check if previous character is lowercase or next character is lowercase
 			prev := s[i-1]
 			if prev >= 'a' && prev <= 'z' {
 				result.WriteByte('_')
@@ -375,7 +404,7 @@ func getColumnName(field reflect.StructField) string {
 	return toSnakeCase(field.Name)
 }
 
-// 添加新的輔助函數來檢查是否有指定值的標籤
+// Add new helper function to check if there's a specified value tag
 func hasTagValue(field reflect.StructField, key string) bool {
 	tag := field.Tag.Get("gorm")
 	for _, option := range strings.Split(tag, ";") {

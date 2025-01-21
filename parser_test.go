@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 測試用的模型結構
+// Test model structure
 type User struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Name      string    `gorm:"size:100;not null;index:idx_name"`
@@ -21,7 +21,7 @@ func (User) TableName() string {
 	return "users"
 }
 
-// 測試嵌入結構
+// Test embedded structure
 type Address struct {
 	Street  string `gorm:"size:200;not null"`
 	City    string `gorm:"size:100"`
@@ -35,11 +35,6 @@ type Customer struct {
 }
 
 func TestParseModel(t *testing.T) {
-	conf := &MigratorConfig{
-		IndexPrefix:       "idx_",
-		UniqueIndexPrefix: "udx_",
-	}
-
 	tests := []struct {
 		name         string
 		model        interface{}
@@ -48,14 +43,14 @@ func TestParseModel(t *testing.T) {
 		wantIdxCount int
 	}{
 		{
-			name:         "基本用戶模型",
+			name:         "Basic User Model",
 			model:        User{},
 			wantTable:    "users",
 			wantColCount: 6,
 			wantIdxCount: 2,
 		},
 		{
-			name:         "帶嵌入結構的客戶模型",
+			name:         "Customer Model with Embedded Structure",
 			model:        Customer{},
 			wantTable:    "customer",
 			wantColCount: 5,
@@ -65,40 +60,35 @@ func TestParseModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tableName, columns, indexes := parseModel(tt.model, conf)
+			tableName, columns, indexes := parseModel(tt.model)
 
 			if tableName != tt.wantTable {
-				t.Errorf("表名不匹配，got %v, want %v", tableName, tt.wantTable)
+				t.Errorf("Table name mismatch, got %v, want %v", tableName, tt.wantTable)
 			}
 
 			if len(columns) != tt.wantColCount {
-				t.Errorf("列數量不匹配，got %v, want %v", len(columns), tt.wantColCount)
+				t.Errorf("Column count mismatch, got %v, want %v", len(columns), tt.wantColCount)
 			}
 
 			if len(indexes) != tt.wantIdxCount {
-				t.Errorf("索引數量不匹配，got %v, want %v", len(indexes), tt.wantIdxCount)
+				t.Errorf("Index count mismatch, got %v, want %v", len(indexes), tt.wantIdxCount)
 			}
 		})
 	}
 }
 
 func TestParseModelToSQLWithIndexes(t *testing.T) {
-	conf := &MigratorConfig{
-		IndexPrefix:       "idx_",
-		UniqueIndexPrefix: "udx_",
-	}
-
-	createTable, indexes, err := parseModelToSQLWithIndexes(User{}, conf)
+	createTable, indexes, err := parseModelToSQLWithIndexes(User{})
 	if err != nil {
-		t.Fatalf("解析模型失敗: %v", err)
+		t.Fatalf("Failed to parse model: %v", err)
 	}
 
-	// 驗證 CREATE TABLE 語句
+	// Validate CREATE TABLE statement
 	if !strings.Contains(createTable, "CREATE TABLE `users`") {
-		t.Error("CREATE TABLE 語句格式錯誤")
+		t.Error("Invalid CREATE TABLE statement format")
 	}
 
-	// 驗證是否包含所有必要的列
+	// Validate if all necessary columns are included
 	requiredColumns := []string{
 		"`id`",
 		"`name`",
@@ -110,13 +100,13 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 
 	for _, col := range requiredColumns {
 		if !strings.Contains(createTable, col) {
-			t.Errorf("缺少列 %s", col)
+			t.Errorf("Missing column %s", col)
 		}
 	}
 
-	// 驗證索引數量
+	// Validate index count
 	if len(indexes) != 2 {
-		t.Errorf("索引數量不正確，期望 2，得到 %d", len(indexes))
+		t.Errorf("Incorrect index count, expected 2, got %d", len(indexes))
 	}
 }
 
@@ -127,7 +117,7 @@ func TestGetSQLType(t *testing.T) {
 		expected string
 	}{
 		{
-			name: "字符串帶大小",
+			name: "String with size",
 			field: func() reflect.StructField {
 				type T struct {
 					F string `gorm:"size:100"`
@@ -137,7 +127,7 @@ func TestGetSQLType(t *testing.T) {
 			expected: "VARCHAR(100)",
 		},
 		{
-			name: "整數自增",
+			name: "Integer with auto increment",
 			field: func() reflect.StructField {
 				type T struct {
 					F uint `gorm:"autoIncrement"`
@@ -147,7 +137,7 @@ func TestGetSQLType(t *testing.T) {
 			expected: "INTEGER UNSIGNED",
 		},
 		{
-			name: "可空指針",
+			name: "Nullable pointer",
 			field: func() reflect.StructField {
 				type T struct {
 					F *string
@@ -230,9 +220,9 @@ func TestHasTag(t *testing.T) {
 		tag      string
 		expected bool
 	}{
-		{"存在的標籤", "Field1", "not null", true},
-		{"不存在的標籤", "Field1", "unique", false},
-		{"帶值的標籤", "Field2", "size", true},
+		{"Existing tag", "Field1", "not null", true},
+		{"Non-existent tag", "Field1", "unique", false},
+		{"Tag with value", "Field2", "size", true},
 	}
 
 	typ := reflect.TypeOf(TestStruct{})
