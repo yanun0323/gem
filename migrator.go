@@ -210,6 +210,7 @@ func (idx *indexDef) ToSQL() string {
 		return fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s);",
 			idx.Name, idx.TableName, strings.Join(idx.Columns, ", "))
 	}
+
 	return fmt.Sprintf("CREATE INDEX %s ON %s (%s);",
 		idx.Name, idx.TableName, strings.Join(idx.Columns, ", "))
 }
@@ -267,14 +268,27 @@ func (m *migrator) generateMigrationFile(timestamp int64, modelName string, sche
 		switch m.conf.Tool {
 		case RawSQL:
 			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
-			content = schema + "\n" + joinStrings(indexes, "\n")
+			if len(indexes) == 0 {
+				content = schema
+			} else {
+				content = schema + "\n" + joinStrings(indexes, "\n")
+			}
 		case Goose:
 			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
-			content = fmt.Sprintf("-- +goose Up\n%s\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
-				schema, joinStrings(indexes, "\n"), modelName)
+			if len(indexes) == 0 {
+				content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
+					schema, modelName)
+			} else {
+				content = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
+					schema, joinStrings(indexes, "\n"), modelName)
+			}
 		case GolangMigrate:
 			filename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, modelName)
-			content = schema + "\n" + joinStrings(indexes, "\n")
+			if len(indexes) == 0 {
+				content = schema
+			} else {
+				content = schema + "\n\n" + joinStrings(indexes, "\n")
+			}
 
 			downContent := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
 			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%d_create_%s.down.sql", timestamp, modelName))

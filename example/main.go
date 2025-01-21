@@ -15,7 +15,10 @@ func main() {
 			KeepDroppedColumn: true,
 		})
 
-		sql.AddModels(model.Model{})
+		sql.AddModels(
+			model.Model{},
+			model.User{},
+		)
 
 		if err := sql.Generate(); err != nil {
 			log.Fatalf("run migrator, err: %+v", err)
@@ -29,7 +32,10 @@ func main() {
 			KeepDroppedColumn: true,
 		})
 
-		sql.AddModels(model.Model{})
+		sql.AddModels(
+			model.Model{},
+			model.User{},
+		)
 
 		if err := sql.Generate(); err != nil {
 			log.Fatalf("run migrator, err: %+v", err)
