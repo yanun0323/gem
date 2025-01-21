@@ -12,3 +12,4 @@ go.work
 *.yaml
 *.build
 Makefile
+example/export

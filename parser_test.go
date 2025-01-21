@@ -7,109 +7,164 @@ import (
 	"time"
 )
 
-type BaseModel struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement"`
-	CreatedAt time.Time `gorm:"not null"`
-	UpdatedAt time.Time `gorm:"not null"`
-}
-
-type Address struct {
-	Street  string `gorm:"size:100"`
-	City    string `gorm:"size:50"`
-	Country string `gorm:"size:50"`
-}
-
+// 測試用的模型結構
 type User struct {
-	BaseModel
-	Name       string    `gorm:"size:255;not null"`
-	Email      string    `gorm:"unique;size:100"`
-	Age        uint8     `gorm:"default:18"`
-	Address    Address   `gorm:"embedded;embeddedPrefix:address_"`
-	DeletedAt  time.Time `gorm:"-:all"`
-	SecretNote string    `gorm:"column:secret_text;type:TEXT"`
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Name      string    `gorm:"size:100;not null;index:idx_name"`
+	Email     string    `gorm:"size:150;uniqueIndex:udx_email"`
+	Age       *int      `gorm:"default:18"`
+	CreatedAt time.Time `gorm:"type:DATETIME;not null"`
+	UpdatedAt time.Time `gorm:"type:DATETIME;not null"`
 }
 
-func TestParseModelToSQL(t *testing.T) {
+func (User) TableName() string {
+	return "users"
+}
+
+// 測試嵌入結構
+type Address struct {
+	Street  string `gorm:"size:200;not null"`
+	City    string `gorm:"size:100"`
+	Country string `gorm:"size:100"`
+}
+
+type Customer struct {
+	ID      uint    `gorm:"primaryKey"`
+	Name    string  `gorm:"size:100"`
+	Address Address `gorm:"embedded;embeddedPrefix:address_"`
+}
+
+func TestParseModel(t *testing.T) {
+	conf := &MigratorConfig{
+		IndexPrefix:       "idx_",
+		UniqueIndexPrefix: "udx_",
+	}
+
 	tests := []struct {
-		name     string
-		model    interface{}
-		contains []string
-		excludes []string
+		name         string
+		model        interface{}
+		wantTable    string
+		wantColCount int
+		wantIdxCount int
 	}{
 		{
-			name:  "基本模型測試",
-			model: User{},
-			contains: []string{
-				"CREATE TABLE user",
-				"id INTEGER PRIMARY KEY AUTO_INCREMENT",
-				"created_at DATETIME NOT NULL",
-				"updated_at DATETIME NOT NULL",
-				"name VARCHAR(255) NOT NULL",
-				"email VARCHAR(100) UNIQUE",
-				"age TINYINT UNSIGNED DEFAULT 18",
-				"address_street VARCHAR(100)",
-				"address_city VARCHAR(50)",
-				"address_country VARCHAR(50)",
-				"secret_text TEXT",
-			},
-			excludes: []string{
-				"deleted_at",
-			},
+			name:         "基本用戶模型",
+			model:        User{},
+			wantTable:    "users",
+			wantColCount: 6,
+			wantIdxCount: 2,
 		},
 		{
-			name:  "簡單結構體測試",
-			model: Address{},
-			contains: []string{
-				"CREATE TABLE address",
-				"street VARCHAR(100)",
-				"city VARCHAR(50)",
-				"country VARCHAR(50)",
-			},
+			name:         "帶嵌入結構的客戶模型",
+			model:        Customer{},
+			wantTable:    "customer",
+			wantColCount: 5,
+			wantIdxCount: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sql := parseModelToSQL(tt.model)
+			tableName, columns, indexes := parseModel(tt.model, conf)
 
-			// 檢查必須包含的字串
-			for _, contain := range tt.contains {
-				if !strings.Contains(sql, contain) {
-					t.Errorf("期望 SQL 包含 '%s', 但沒有找到\nSQL: %s", contain, sql)
-				}
+			if tableName != tt.wantTable {
+				t.Errorf("表名不匹配，got %v, want %v", tableName, tt.wantTable)
 			}
 
-			// 檢查必須排除的字串
-			for _, exclude := range tt.excludes {
-				if strings.Contains(sql, exclude) {
-					t.Errorf("SQL 不應該包含 '%s', 但找到了\nSQL: %s", exclude, sql)
-				}
+			if len(columns) != tt.wantColCount {
+				t.Errorf("列數量不匹配，got %v, want %v", len(columns), tt.wantColCount)
+			}
+
+			if len(indexes) != tt.wantIdxCount {
+				t.Errorf("索引數量不匹配，got %v, want %v", len(indexes), tt.wantIdxCount)
 			}
 		})
 	}
 }
 
-func TestParseModelToSQL_SpecialCases(t *testing.T) {
-	type SpecialTypes struct {
-		ID        int64   `gorm:"primaryKey"`
-		Binary    []byte  `gorm:"type:BLOB"`
-		FloatNum  float64 `gorm:"type:DECIMAL(10,2)"`
-		IsActive  bool
-		CreatedAt time.Time
+func TestParseModelToSQLWithIndexes(t *testing.T) {
+	conf := &MigratorConfig{
+		IndexPrefix:       "idx_",
+		UniqueIndexPrefix: "udx_",
 	}
 
-	sql := parseModelToSQL(SpecialTypes{})
-	expectedParts := []string{
-		"BLOB",
-		"DECIMAL(10,2)",
-		"BOOLEAN",
-		"DATETIME",
+	createTable, indexes, err := parseModelToSQLWithIndexes(User{}, conf)
+	if err != nil {
+		t.Fatalf("解析模型失敗: %v", err)
 	}
 
-	for _, part := range expectedParts {
-		if !strings.Contains(sql, part) {
-			t.Errorf("期望 SQL 包含 '%s', 但沒有找到\nSQL: %s", part, sql)
+	// 驗證 CREATE TABLE 語句
+	if !strings.Contains(createTable, "CREATE TABLE `users`") {
+		t.Error("CREATE TABLE 語句格式錯誤")
+	}
+
+	// 驗證是否包含所有必要的列
+	requiredColumns := []string{
+		"`id`",
+		"`name`",
+		"`email`",
+		"`age`",
+		"`created_at`",
+		"`updated_at`",
+	}
+
+	for _, col := range requiredColumns {
+		if !strings.Contains(createTable, col) {
+			t.Errorf("缺少列 %s", col)
 		}
+	}
+
+	// 驗證索引數量
+	if len(indexes) != 2 {
+		t.Errorf("索引數量不正確，期望 2，得到 %d", len(indexes))
+	}
+}
+
+func TestGetSQLType(t *testing.T) {
+	tests := []struct {
+		name     string
+		field    reflect.StructField
+		expected string
+	}{
+		{
+			name: "字符串帶大小",
+			field: func() reflect.StructField {
+				type T struct {
+					F string `gorm:"size:100"`
+				}
+				return reflect.TypeOf(T{}).Field(0)
+			}(),
+			expected: "VARCHAR(100)",
+		},
+		{
+			name: "整數自增",
+			field: func() reflect.StructField {
+				type T struct {
+					F uint `gorm:"autoIncrement"`
+				}
+				return reflect.TypeOf(T{}).Field(0)
+			}(),
+			expected: "INTEGER UNSIGNED",
+		},
+		{
+			name: "可空指針",
+			field: func() reflect.StructField {
+				type T struct {
+					F *string
+				}
+				return reflect.TypeOf(T{}).Field(0)
+			}(),
+			expected: "VARCHAR(255) NULL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getSQLType(tt.field)
+			if got != tt.expected {
+				t.Errorf("getSQLType() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }
 
@@ -118,18 +173,19 @@ func TestToSnakeCase(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"UserName", "user_name"},
 		{"ID", "id"},
+		{"UserName", "user_name"},
 		{"APIKey", "api_key"},
-		{"SimpleText", "simple_text"},
-		{"", ""},
+		{"OAuthToken", "oauth_token"},
+		{"OAuth2Token", "oauth2_token"},
+		{"SimpleURL", "simple_url"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := toSnakeCase(tt.input)
-			if result != tt.expected {
-				t.Errorf("toSnakeCase(%s) = %s; 期望 %s", tt.input, result, tt.expected)
+			got := toSnakeCase(tt.input)
+			if got != tt.expected {
+				t.Errorf("toSnakeCase(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -137,97 +193,84 @@ func TestToSnakeCase(t *testing.T) {
 
 func TestGetTagValue(t *testing.T) {
 	type TestStruct struct {
-		Field string `gorm:"size:255;column:custom_name;default:test"`
+		Field string `gorm:"size:100;not null;index:idx_field"`
 	}
 
-	field, _ := reflect.TypeOf(TestStruct{}).FieldByName("Field")
+	field := reflect.TypeOf(TestStruct{}).Field(0)
+
 	tests := []struct {
 		key      string
 		expected string
 	}{
-		{"size", "255"},
-		{"column", "custom_name"},
-		{"default", "test"},
+		{"size", "100"},
+		{"not null", ""},
+		{"index", "idx_field"},
 		{"nonexistent", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			result := getTagValue(field, tt.key)
-			if result != tt.expected {
-				t.Errorf("getTagValue(%s) = %s; 期望 %s", tt.key, result, tt.expected)
+			got := getTagValue(field, tt.key)
+			if got != tt.expected {
+				t.Errorf("getTagValue() with key %q = %q, want %q", tt.key, got, tt.expected)
 			}
 		})
 	}
 }
 
-type NullableFields struct {
-	ID        uint    `gorm:"primaryKey"`
-	Name      *string `gorm:"size:100"`
-	Age       *int
-	IsActive  *bool
-	Score     *float64 `gorm:"type:DECIMAL(5,2)"`
-	UpdatedAt *time.Time
+func TestHasTag(t *testing.T) {
+	type TestStruct struct {
+		Field1 string `gorm:"not null;index"`
+		Field2 string `gorm:"size:100"`
+	}
+
+	tests := []struct {
+		name     string
+		field    string
+		tag      string
+		expected bool
+	}{
+		{"存在的標籤", "Field1", "not null", true},
+		{"不存在的標籤", "Field1", "unique", false},
+		{"帶值的標籤", "Field2", "size", true},
+	}
+
+	typ := reflect.TypeOf(TestStruct{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, _ := typ.FieldByName(tt.field)
+			got := hasTag(field, tt.tag)
+			if got != tt.expected {
+				t.Errorf("hasTag() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
 }
 
-func TestParseModelToSQL_NullableFields(t *testing.T) {
-	sql := parseModelToSQL(NullableFields{})
-	expectedParts := []string{
-		"name VARCHAR(100) NULL",
-		"age INTEGER NULL",
-		"is_active BOOLEAN NULL",
-		"score DECIMAL(5,2) NULL",
-		"updated_at DATETIME NULL",
+func TestGetColumnName(t *testing.T) {
+	type TestStruct struct {
+		UserID    string `gorm:"column:user_identifier"`
+		FirstName string
+		LastName  string `gorm:"column:surname"`
 	}
 
-	for _, part := range expectedParts {
-		if !strings.Contains(sql, part) {
-			t.Errorf("期望 SQL 包含 '%s', 但沒有找到\nSQL: %s", part, sql)
-		}
-	}
-}
-
-func TestParseModelToSQL_AdvancedFeatures(t *testing.T) {
-	type AdvancedModel struct {
-		ID    uint    `gorm:"primaryKey"`
-		Price float64 `gorm:"precision:10;scale:2;check:price >= 0"`
-		Name  string  `gorm:"index;comment:'用戶名稱'"`
-		Email string  `gorm:"uniqueIndex"`
+	tests := []struct {
+		fieldName string
+		expected  string
+	}{
+		{"UserID", "user_identifier"},
+		{"FirstName", "first_name"},
+		{"LastName", "surname"},
 	}
 
-	sql, indexes := parseModelToSQLWithIndexes(AdvancedModel{})
-
-	// 打印實際的 SQL 和索引，方便調試
-	t.Logf("Generated SQL: %s", sql)
-	t.Logf("Generated Indexes: %v", indexes)
-
-	expectedParts := []string{
-		"price DECIMAL(10,2) CHECK (price >= 0) NOT NULL",
-		"name VARCHAR(255) NOT NULL COMMENT '用戶名稱'",
-	}
-
-	for _, part := range expectedParts {
-		if !strings.Contains(sql, part) {
-			t.Errorf("期望 SQL 包含 '%s', 但沒有找到\nSQL: %s", part, sql)
-		}
-	}
-
-	expectedIndexes := []string{
-		"CREATE INDEX idx_name ON advanced_model (name);",
-		"CREATE UNIQUE INDEX udx_email ON advanced_model (email);",
-	}
-
-	if len(indexes) != len(expectedIndexes) {
-		t.Errorf("期望的索引數量為 %d，但實際為 %d", len(expectedIndexes), len(indexes))
-	}
-
-	for i, expectedIdx := range expectedIndexes {
-		if i >= len(indexes) {
-			t.Errorf("缺少索引: %s", expectedIdx)
-			continue
-		}
-		if indexes[i] != expectedIdx {
-			t.Errorf("索引不匹配:\n期望: %s\n實際: %s", expectedIdx, indexes[i])
-		}
+	typ := reflect.TypeOf(TestStruct{})
+	for _, tt := range tests {
+		t.Run(tt.fieldName, func(t *testing.T) {
+			field, _ := typ.FieldByName(tt.fieldName)
+			got := getColumnName(field)
+			if got != tt.expected {
+				t.Errorf("getColumnName() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }

@@ -10,9 +10,11 @@ import (
 func main() {
 	{
 		sql := gem.New(&gem.MigratorConfig{
-			Format:            gem.Goose,
+			Tool:              gem.Goose,
 			ExportDir:         "./example/export/goose",
 			KeepDroppedColumn: true,
+			IndexPrefix:       "index_",
+			UniqueIndexPrefix: "unique_index_",
 		})
 
 		sql.Model(model.Model{})
@@ -24,7 +26,7 @@ func main() {
 
 	{
 		sql := gem.New(&gem.MigratorConfig{
-			Format:            gem.GoMigrate,
+			Tool:              gem.GolangMigrate,
 			ExportDir:         "./example/export/go_migrate",
 			KeepDroppedColumn: true,
 		})

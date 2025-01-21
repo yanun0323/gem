@@ -14,12 +14,12 @@ type Model struct {
 	UpdatedAt int64     `gorm:"column:updated_at;type:bigint;autoUpdateTime"`
 
 	// 各種數據類型和約束
-	Name        string    `gorm:"column:name;type:varchar(100);not null;index:idx_name_age"`
-	Age         int       `gorm:"column:age;check:age > 0;index:idx_name_age"`
+	Name        string    `gorm:"column:name;type:varchar(100);not null;uniqueIndex"`
+	Age         int       `gorm:"column:age;check:age > 0"`
 	Email       string    `gorm:"column:email;size:255;uniqueIndex:udx_email_score_is_active"`
 	Score       float64   `gorm:"column:score;precision:10;scale:2;default:0.00;uniqueIndex:udx_email_score_is_active"`
 	IsActive    bool      `gorm:"column:is_active;default:true;uniqueIndex:udx_email_score_is_active"`
-	Birthday    time.Time `gorm:"column:birth_day;type:date"`
+	Birthday    time.Time `gorm:"column:birth_day;type:date;index"`
 	Description string    `gorm:"column:description;type:text;comment:使用者備註"`
 
 	// JSON 序列化

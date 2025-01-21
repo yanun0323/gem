@@ -19,7 +19,7 @@ type indexInfo struct {
 }
 
 // parseModel 解析 GORM model 結構體
-func parseModel(model interface{}) (tableName string, columns []string, indexes map[string]*indexInfo) {
+func parseModel(model interface{}, conf *MigratorConfig) (tableName string, columns []string, indexes map[string]*indexInfo) {
 	// 獲取結構體的反射類型
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -60,7 +60,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 			indexName := getTagValue(field, "index")
 			if indexName == "" {
 				// 如果只有 index 標記但沒有值，創建單欄位索引
-				indexName = fmt.Sprintf("idx_%s", toSnakeCase(field.Name))
+				indexName = fmt.Sprintf("%s%s", conf.idx(), toSnakeCase(field.Name))
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
 					Columns:  []string{toSnakeCase(field.Name)},
@@ -85,7 +85,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 			indexName := getTagValue(field, "uniqueIndex")
 			if indexName == "" {
 				// 如果只有 uniqueIndex 標記但沒有值，創建單欄位唯一索引
-				indexName = fmt.Sprintf("udx_%s", toSnakeCase(field.Name))
+				indexName = fmt.Sprintf("%s%s", conf.udx(), toSnakeCase(field.Name))
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
 					Columns:  []string{toSnakeCase(field.Name)},
@@ -109,17 +109,9 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 	return
 }
 
-// parseModelToSQL 將 GORM model 結構體解析為 CREATE TABLE SQL 語句
-func parseModelToSQL(model interface{}) string {
-	tableName, columns, _ := parseModel(model)
-	return fmt.Sprintf("CREATE TABLE %s (\n  %s\n);",
-		tableName,
-		strings.Join(columns, ",\n  "))
-}
-
 // parseModelToSQLWithIndexes 解析模型並返回 CREATE TABLE 語句和索引定義
-func parseModelToSQLWithIndexes(model interface{}) (string, []string) {
-	tableName, columns, indexes := parseModel(model)
+func parseModelToSQLWithIndexes(model interface{}, conf *MigratorConfig) (string, []string, error) {
+	tableName, columns, indexes := parseModel(model, conf)
 
 	// 檢查是否有主鍵字段
 	hasPrimaryKey := false
@@ -162,13 +154,13 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string) {
 
 	sort.Strings(indexStatements)
 
-	return createTable, indexStatements
+	return createTable, indexStatements, nil
 }
 
 // parseField 解析單個字段
 func parseField(field reflect.StructField) string {
 	// 如果標記為 "-" 則忽略該字段
-	if getTagValue(field, "-") == "all" {
+	if ignore := getTagValue(field, "-"); ignore == "all" || ignore == "migration" {
 		return ""
 	}
 

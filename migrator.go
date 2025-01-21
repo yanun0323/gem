@@ -14,19 +14,79 @@ import (
 	"time"
 )
 
+// MigrationTool represents the type of migration tool to be used for database schema migrations.
 type MigrationTool int
 
 const (
-	RawSQL MigrationTool = iota + 1
+	// RawSQL generates plain SQL migration files without any specific migration tool format.
+	RawSQL MigrationTool = iota
+	// Goose generates migration files in the format compatible with the Goose migration tool.
+	// See: https://github.com/pressly/goose
 	Goose
-	GoMigrate
+	// GolangMigrate generates migration files in the format compatible with the Golang-Migrate tool.
+	// See: https://github.com/golang-migrate/migrate
+	GolangMigrate
 )
 
-type modelSnapshot struct {
-	Name    string   `json:"name"`
-	Hash    string   `json:"hash"`
-	Schema  string   `json:"schema"`
-	Indexes []string `json:"indexes"`
+// MigratorConfig defines the configuration options for the database schema migration generator.
+type MigratorConfig struct {
+	// Tool specifies which migration tool format to use for generating migration files.
+	// Available options are:
+	// - RawSQL: Plain SQL files
+	// - Goose: Goose-compatible format
+	// - GolangMigrate: Golang-Migrate compatible format
+	//
+	// Default: RawSQL
+	Tool MigrationTool
+
+	// ExportDir specifies the directory path where migration files will be stored.
+	// The path can be either absolute or relative to the current working directory.
+	//
+	// Default: ./migrations
+	ExportDir string
+
+	// KeepDroppedColumn determines whether to preserve dropped columns in down migrations.
+	// When set to true, dropped columns will be restored in down migrations.
+	// When set to false, dropped columns will be permanently removed.
+	//
+	// Default: false
+	KeepDroppedColumn bool
+
+	// IndexPrefix defines the prefix string used for regular (non-unique) index names.
+	// This helps in maintaining consistent naming conventions for database indexes.
+	//
+	// Default: idx_
+	IndexPrefix string
+
+	// UniqueIndexPrefix defines the prefix string used for unique index names.
+	// This helps in maintaining consistent naming conventions for unique indexes.
+	//
+	// Default: udx_
+	UniqueIndexPrefix string
+}
+
+func (c *MigratorConfig) getExportDir() string {
+	if len(c.ExportDir) == 0 {
+		return "." + string(os.PathSeparator) + "migrations"
+	}
+
+	return c.ExportDir
+}
+
+func (c *MigratorConfig) idx() string {
+	if len(c.IndexPrefix) == 0 {
+		return "idx_"
+	}
+
+	return c.IndexPrefix
+}
+
+func (c *MigratorConfig) udx() string {
+	if len(c.UniqueIndexPrefix) == 0 {
+		return "udx_"
+	}
+
+	return c.UniqueIndexPrefix
 }
 
 type migrator struct {
@@ -35,10 +95,104 @@ type migrator struct {
 	snapshots []*modelSnapshot
 }
 
-type MigratorConfig struct {
-	Format            MigrationTool
-	ExportDir         string
-	KeepDroppedColumn bool
+// New creates a new migrator instance with the given configuration.
+// If config is nil, default configuration values will be used.
+func New(config *MigratorConfig) *migrator {
+	return &migrator{
+		conf:      config,
+		models:    make([]interface{}, 0),
+		snapshots: make([]*modelSnapshot, 0),
+	}
+}
+
+// Model adds one or more models to the migrator for schema migration generation.
+// The models should be struct types that represent database tables.
+// Returns the migrator instance for method chaining.
+func (m *migrator) Model(models ...interface{}) *migrator {
+	m.models = append(m.models, models...)
+	return m
+}
+
+// Run executes the migration generation process for all added models.
+// It performs the following steps:
+// 1. Creates necessary directories for migration files
+// 2. Loads existing snapshots if any
+// 3. For each model:
+//   - Generates SQL schema and indexes
+//   - Compares with previous snapshot if exists
+//   - Creates migration files for schema changes
+//   - Updates snapshots
+//
+// 4. Saves updated snapshots
+//
+// Returns an error if any step fails during the process.
+func (m *migrator) Run() error {
+	if err := os.MkdirAll(m.conf.getExportDir(), 0755); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(m.snapshotsDir(), 0755); err != nil {
+		return err
+	}
+
+	if err := m.loadSnapshots(); err != nil {
+		return err
+	}
+
+	for _, model := range m.models {
+		schema, indexes, err := parseModelToSQLWithIndexes(model, m.conf)
+		if err != nil {
+			return fmt.Errorf("parse model, err: %w", err)
+		}
+
+		t := reflect.TypeOf(model)
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		modelName := toSnakeCase(t.Name())
+
+		// 如果是可命名的接口，使用指定的表名
+		if nameable, ok := model.(nameable); ok {
+			modelName = nameable.TableName()
+		}
+
+		newHash := m.generateHash(schema, indexes)
+		snapshot := m.findSnapshot(modelName)
+
+		if snapshot == nil {
+			// 新表
+			if err := m.generateMigrationFile(modelName, schema, indexes, true); err != nil {
+				return err
+			}
+			m.snapshots = append(m.snapshots, &modelSnapshot{
+				Name:    modelName,
+				Hash:    newHash,
+				Schema:  schema,
+				Indexes: indexes,
+			})
+		} else if snapshot.Hash != newHash {
+			// 檢查是否有實際變動
+			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
+			if len(upStatements) > 0 {
+				// 只有在有實際變動時才生成遷移文件
+				if err := m.generateMigrationFile(modelName, schema, indexes, false); err != nil {
+					return err
+				}
+				snapshot.Hash = newHash
+				snapshot.Schema = schema
+				snapshot.Indexes = indexes
+			}
+		}
+	}
+
+	return m.saveSnapshots()
+}
+
+type modelSnapshot struct {
+	Name    string   `json:"name"`
+	Hash    string   `json:"hash"`
+	Schema  string   `json:"schema"`
+	Indexes []string `json:"indexes"`
 }
 
 type columnDef struct {
@@ -78,21 +232,8 @@ func (idx *indexDef) ToSQL() string {
 		idx.Name, idx.TableName, strings.Join(idx.Columns, ", "))
 }
 
-func New(config *MigratorConfig) *migrator {
-	return &migrator{
-		conf:      config,
-		models:    make([]interface{}, 0),
-		snapshots: make([]*modelSnapshot, 0),
-	}
-}
-
-func (m *migrator) Model(models ...interface{}) *migrator {
-	m.models = append(m.models, models...)
-	return m
-}
-
 func (m *migrator) snapshotsDir() string {
-	return filepath.Join(m.conf.ExportDir, ".gem")
+	return filepath.Join(m.conf.getExportDir(), ".gem")
 }
 
 func (m *migrator) loadSnapshots() error {
@@ -142,20 +283,20 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 
 	if isNew {
 		// 新表的情況
-		switch m.conf.Format {
+		switch m.conf.Tool {
 		case RawSQL:
 			filename = fmt.Sprintf("%s_create_%s.sql", timestamp, modelName)
 			content = schema + "\n" + joinStrings(indexes, "\n")
 		case Goose:
 			filename = fmt.Sprintf("%s_create_%s.sql", timestamp, modelName)
-			content = fmt.Sprintf("-- +goose Up\n%s\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS %s;\n",
+			content = fmt.Sprintf("-- +goose Up\n%s\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
 				schema, joinStrings(indexes, "\n"), modelName)
-		case GoMigrate:
+		case GolangMigrate:
 			filename = fmt.Sprintf("%s_create_%s.up.sql", timestamp, modelName)
 			content = schema + "\n" + joinStrings(indexes, "\n")
 
-			downContent := fmt.Sprintf("DROP TABLE IF EXISTS %s;", modelName)
-			downFile := filepath.Join(m.conf.ExportDir, fmt.Sprintf("%s_create_%s.down.sql", timestamp, modelName))
+			downContent := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
+			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%s_create_%s.down.sql", timestamp, modelName))
 			if err := os.WriteFile(downFile, []byte(downContent), 0644); err != nil {
 				return err
 			}
@@ -163,7 +304,7 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 	} else {
 		// 修改表的情況
 		upStatements, downStatements := m.generateAlterStatements(modelName, schema, indexes)
-		switch m.conf.Format {
+		switch m.conf.Tool {
 		case RawSQL:
 			filename = fmt.Sprintf("%s_alter_%s.sql", timestamp, modelName)
 			content = joinStrings(upStatements, "\n")
@@ -172,18 +313,18 @@ func (m *migrator) generateMigrationFile(modelName string, schema string, indexe
 			content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\n%s\n",
 				joinStrings(upStatements, "\n"),
 				joinStrings(downStatements, "\n"))
-		case GoMigrate:
+		case GolangMigrate:
 			filename = fmt.Sprintf("%s_alter_%s.up.sql", timestamp, modelName)
 			content = joinStrings(upStatements, "\n")
 
-			downFile := filepath.Join(m.conf.ExportDir, fmt.Sprintf("%s_alter_%s.down.sql", timestamp, modelName))
+			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%s_alter_%s.down.sql", timestamp, modelName))
 			if err := os.WriteFile(downFile, []byte(joinStrings(downStatements, "\n")), 0644); err != nil {
 				return err
 			}
 		}
 	}
 
-	return os.WriteFile(filepath.Join(m.conf.ExportDir, filename), []byte(content), 0644)
+	return os.WriteFile(filepath.Join(m.conf.getExportDir(), filename), []byte(content), 0644)
 }
 
 func (m *migrator) generateAlterStatements(tableName string, newSchema string, newIndexes []string) (upStatements []string, downStatements []string) {
@@ -254,65 +395,6 @@ func joinStrings(str []string, sep string) string {
 		result += sep + s
 	}
 	return result
-}
-
-func (m *migrator) Run() error {
-	if err := os.MkdirAll(m.conf.ExportDir, 0755); err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(m.snapshotsDir(), 0755); err != nil {
-		return err
-	}
-
-	if err := m.loadSnapshots(); err != nil {
-		return err
-	}
-
-	for _, model := range m.models {
-		schema, indexes := parseModelToSQLWithIndexes(model)
-
-		t := reflect.TypeOf(model)
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
-		}
-		modelName := toSnakeCase(t.Name())
-
-		// 如果是可命名的接口，使用指定的表名
-		if nameable, ok := model.(nameable); ok {
-			modelName = nameable.TableName()
-		}
-
-		newHash := m.generateHash(schema, indexes)
-		snapshot := m.findSnapshot(modelName)
-
-		if snapshot == nil {
-			// 新表
-			if err := m.generateMigrationFile(modelName, schema, indexes, true); err != nil {
-				return err
-			}
-			m.snapshots = append(m.snapshots, &modelSnapshot{
-				Name:    modelName,
-				Hash:    newHash,
-				Schema:  schema,
-				Indexes: indexes,
-			})
-		} else if snapshot.Hash != newHash {
-			// 檢查是否有實際變動
-			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
-			if len(upStatements) > 0 {
-				// 只有在有實際變動時才生成遷移文件
-				if err := m.generateMigrationFile(modelName, schema, indexes, false); err != nil {
-					return err
-				}
-				snapshot.Hash = newHash
-				snapshot.Schema = schema
-				snapshot.Indexes = indexes
-			}
-		}
-	}
-
-	return m.saveSnapshots()
 }
 
 // parseCreateTable 解析 CREATE TABLE 語句
