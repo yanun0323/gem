@@ -103,22 +103,23 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		// Handle unique indexes
 		if hasTag(field, "uniqueIndex") {
 			indexName := getTagValue(field, "uniqueIndex")
+			columnName := getColumnName(field)
 			if indexName == "" {
 				// If there's only uniqueIndex tag without value, create a single-column unique index
-				indexName = fmt.Sprintf("udx_%s", toSnakeCase(field.Name))
+				indexName = fmt.Sprintf("udx_%s", columnName)
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
-					Columns:  []string{toSnakeCase(field.Name)},
+					Columns:  []string{columnName},
 					IsUnique: true,
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
-					idx.Columns = append(idx.Columns, toSnakeCase(field.Name))
+					idx.Columns = append(idx.Columns, columnName)
 				} else {
 					indexes[indexName] = &indexInfo{
 						Name:     indexName,
-						Columns:  []string{toSnakeCase(field.Name)},
+						Columns:  []string{columnName},
 						IsUnique: true,
 					}
 				}

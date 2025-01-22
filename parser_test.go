@@ -11,7 +11,7 @@ import (
 type User struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Name      string    `gorm:"size:100;not null;index:idx_name"`
-	Email     string    `gorm:"size:150;uniqueIndex:udx_email"`
+	Email     string    `gorm:"column:email_address;size:150;uniqueIndex"`
 	Age       *int      `gorm:"default:18"`
 	CreatedAt time.Time `gorm:"type:DATETIME;not null"`
 	UpdatedAt time.Time `gorm:"type:DATETIME;not null"`
@@ -63,15 +63,15 @@ func TestParseModel(t *testing.T) {
 			tableName, columns, indexes := parseModel(tt.model)
 
 			if tableName != tt.wantTable {
-				t.Errorf("Table name mismatch, got %v, want %v", tableName, tt.wantTable)
+				t.Fatalf("Table name mismatch, got %v, want %v", tableName, tt.wantTable)
 			}
 
 			if len(columns) != tt.wantColCount {
-				t.Errorf("Column count mismatch, got %v, want %v", len(columns), tt.wantColCount)
+				t.Fatalf("Column count mismatch, got %v, want %v", len(columns), tt.wantColCount)
 			}
 
 			if len(indexes) != tt.wantIdxCount {
-				t.Errorf("Index count mismatch, got %v, want %v", len(indexes), tt.wantIdxCount)
+				t.Fatalf("Index count mismatch, got %v, want %v", len(indexes), tt.wantIdxCount)
 			}
 		})
 	}
@@ -85,14 +85,14 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 
 	// Validate CREATE TABLE statement
 	if !strings.Contains(createTable, "CREATE TABLE `users`") {
-		t.Error("Invalid CREATE TABLE statement format")
+		t.Fatal("Invalid CREATE TABLE statement format")
 	}
 
 	// Validate if all necessary columns are included
 	requiredColumns := []string{
 		"`id`",
 		"`name`",
-		"`email`",
+		"`email_address`",
 		"`age`",
 		"`created_at`",
 		"`updated_at`",
@@ -100,14 +100,26 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 
 	for _, col := range requiredColumns {
 		if !strings.Contains(createTable, col) {
-			t.Errorf("Missing column %s", col)
+			t.Fatalf("Missing column %s", col)
 		}
 	}
 
-	// Validate index count
-	if len(indexes) != 2 {
-		t.Errorf("Incorrect index count, expected 2, got %d", len(indexes))
+	expectedIndex := []string{
+		"CREATE INDEX idx_name ON `users` (`name`);",
+		"CREATE UNIQUE INDEX udx_email_address ON `users` (`email_address`);",
 	}
+
+	// Validate index count
+	if len(indexes) != len(expectedIndex) {
+		t.Fatalf("Incorrect index count, expected 2, got %d", len(indexes))
+	}
+
+	for i, index := range indexes {
+		if !strings.Contains(index, expectedIndex[i]) {
+			t.Fatalf("Index Mismatch\nexpected: %s\nbut got : %s\n", expectedIndex[i], index)
+		}
+	}
+
 }
 
 func TestGetSQLType(t *testing.T) {
@@ -152,7 +164,7 @@ func TestGetSQLType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := getSQLType(tt.field)
 			if got != tt.expected {
-				t.Errorf("getSQLType() = %v, want %v", got, tt.expected)
+				t.Fatalf("getSQLType() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
@@ -175,7 +187,7 @@ func TestToSnakeCase(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			got := toSnakeCase(tt.input)
 			if got != tt.expected {
-				t.Errorf("toSnakeCase(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Fatalf("toSnakeCase(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -202,7 +214,7 @@ func TestGetTagValue(t *testing.T) {
 		t.Run(tt.key, func(t *testing.T) {
 			got := getTagValue(field, tt.key)
 			if got != tt.expected {
-				t.Errorf("getTagValue() with key %q = %q, want %q", tt.key, got, tt.expected)
+				t.Fatalf("getTagValue() with key %q = %q, want %q", tt.key, got, tt.expected)
 			}
 		})
 	}
@@ -231,7 +243,7 @@ func TestHasTag(t *testing.T) {
 			field, _ := typ.FieldByName(tt.field)
 			got := hasTag(field, tt.tag)
 			if got != tt.expected {
-				t.Errorf("hasTag() = %v, want %v", got, tt.expected)
+				t.Fatalf("hasTag() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
@@ -259,7 +271,7 @@ func TestGetColumnName(t *testing.T) {
 			field, _ := typ.FieldByName(tt.fieldName)
 			got := getColumnName(field)
 			if got != tt.expected {
-				t.Errorf("getColumnName() = %v, want %v", got, tt.expected)
+				t.Fatalf("getColumnName() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
