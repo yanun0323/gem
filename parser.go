@@ -139,7 +139,7 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 	tableName, columns, indexes := parseModel(model)
 
 	// Check if there's a primary key field
-	hasPrimaryKey := false
+	primaryKeyName := ""
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -148,16 +148,18 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if hasTag(field, "primaryKey") {
-			hasPrimaryKey = true
+			primaryKeyName = getColumnName(field)
 			break
 		}
 	}
 
-	// If there's a primary key, add PRIMARY KEY constraint
-	if hasPrimaryKey {
-		columns = append(columns, "PRIMARY KEY (`id`)")
-	} else {
+	if len(primaryKeyName) == 0 {
 		return "", nil, fmt.Errorf("require primary key in table (%s)", tableName)
+	}
+
+	// If there's a primary key, add PRIMARY KEY constraint
+	if len(primaryKeyName) != 0 {
+		columns = append(columns, fmt.Sprintf("PRIMARY KEY (`%s`)", primaryKeyName))
 	}
 
 	// Generate CREATE TABLE statement
