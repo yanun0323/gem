@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -135,6 +136,7 @@ func (m *migrator) Generate() error {
 		return fmt.Errorf("generate do not edit sign file, err: %w", err)
 	}
 
+	log.Println("...\tStart generating migration.")
 	for _, model := range m.models {
 		timestamp++
 
@@ -157,9 +159,14 @@ func (m *migrator) Generate() error {
 		newHash := m.generateHash(schema, indexes)
 		snapshot := m.findSnapshot(modelName)
 
+		var (
+			filenames []string
+		)
+
 		if snapshot == nil {
 			// New table
-			if err := m.generateMigrationFile(timestamp, modelName, schema, indexes, true); err != nil {
+			filenames, err = m.generateMigrationFile(timestamp, modelName, schema, indexes, true)
+			if err != nil {
 				return err
 			}
 			m.snapshots = append(m.snapshots, &modelSnapshot{
@@ -173,7 +180,8 @@ func (m *migrator) Generate() error {
 			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
 			if len(upStatements) > 0 {
 				// Only generate migration file when there are actual changes
-				if err := m.generateMigrationFile(timestamp, modelName, schema, indexes, false); err != nil {
+				filenames, err = m.generateMigrationFile(timestamp, modelName, schema, indexes, false)
+				if err != nil {
 					return err
 				}
 				snapshot.Hash = newHash
@@ -181,7 +189,13 @@ func (m *migrator) Generate() error {
 				snapshot.Indexes = indexes
 			}
 		}
+
+		for _, f := range filenames {
+			log.Default().Printf("OK\t%s", f)
+		}
 	}
+
+	log.Println("\tGenerate migration done.")
 
 	return m.saveSnapshots()
 }
@@ -289,9 +303,15 @@ func wrapDoNotEdit(s string) string {
 	return _textDoNotEdit + "\n--\n" + _textGeneratedBy + "\n\n" + s + "\n\n" + _textDoNotEdit
 }
 
-func (m *migrator) generateMigrationFile(timestamp int64, modelName string, schema string, indexes []string, isNew bool) error {
-	var filename string
-	var content string
+func (m *migrator) generateMigrationFile(timestamp int64, modelName string, schema string, indexes []string, isNew bool) ([]string, error) {
+	var (
+		filename string
+		content  string
+
+		hasDownfile  bool
+		downfilename string
+		downContent  string
+	)
 
 	if isNew {
 		// Case of new table
@@ -320,15 +340,9 @@ func (m *migrator) generateMigrationFile(timestamp int64, modelName string, sche
 				content = schema + "\n\n" + joinStrings(indexes, "\n")
 			}
 
-			downContent := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
-			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%d_create_%s.down.sql", timestamp, modelName))
-			if err := os.WriteFile(
-				downFile,
-				[]byte(wrapDoNotEdit(downContent)),
-				0644,
-			); err != nil {
-				return err
-			}
+			hasDownfile = true
+			downfilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, modelName)
+			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
 		}
 	} else {
 		// Case of table modification
@@ -346,20 +360,27 @@ func (m *migrator) generateMigrationFile(timestamp int64, modelName string, sche
 			filename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, modelName)
 			content = joinStrings(upStatements, "\n")
 
-			downFile := filepath.Join(m.conf.getExportDir(), fmt.Sprintf("%d_alter_%s.down.sql", timestamp, modelName))
-			if err := os.WriteFile(
-				downFile,
-				[]byte(wrapDoNotEdit(joinStrings(downStatements, "\n"))),
-				0644,
-			); err != nil {
-				return err
-			}
+			hasDownfile = true
+			downfilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, modelName)
+			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
 		}
 	}
 
 	content = wrapDoNotEdit(content)
+	if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), filename), []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("write (%s), err: %w", filename, err)
+	}
 
-	return os.WriteFile(filepath.Join(m.conf.getExportDir(), filename), []byte(content), 0644)
+	if !hasDownfile {
+		return []string{filename}, nil
+	}
+
+	downContent = wrapDoNotEdit(downContent)
+	if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), downfilename), []byte(downContent), 0644); err != nil {
+		return nil, fmt.Errorf("write (%s), err: %w", filename, err)
+	}
+
+	return []string{filename, downfilename}, nil
 }
 
 func (m *migrator) generateAlterStatements(tableName string, newSchema string, newIndexes []string) (upStatements []string, downStatements []string) {
