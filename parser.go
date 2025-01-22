@@ -156,6 +156,8 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 	// If there's a primary key, add PRIMARY KEY constraint
 	if hasPrimaryKey {
 		columns = append(columns, "PRIMARY KEY (`id`)")
+	} else {
+		return "", nil, fmt.Errorf("require primary key in table (%s)", tableName)
 	}
 
 	// Generate CREATE TABLE statement
