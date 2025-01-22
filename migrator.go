@@ -180,6 +180,8 @@ func (m *migrator) Generate() error {
 	return m.saveSnapshots()
 }
 
+const _snapshotName = "snapshots.json"
+
 type modelSnapshot struct {
 	Name    string   `json:"name"`
 	Hash    string   `json:"hash"`
@@ -230,24 +232,25 @@ func (m *migrator) snapshotsDir() string {
 }
 
 func (m *migrator) loadSnapshots() error {
-	snapshotFile := filepath.Join(m.snapshotsDir(), "snapshots.json")
+	snapshotFile := filepath.Join(m.snapshotsDir(), _snapshotName)
 	data, err := os.ReadFile(snapshotFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("read snapshots, err: %w", err)
 	}
 
 	return json.Unmarshal(data, &m.snapshots)
 }
 
 func (m *migrator) saveSnapshots() error {
-	snapshotFile := filepath.Join(m.snapshotsDir(), "snapshots.json")
+	snapshotFile := filepath.Join(m.snapshotsDir(), _snapshotName)
 	data, err := json.MarshalIndent(m.snapshots, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal snapshots, err: %w", err)
 	}
+
 	return os.WriteFile(snapshotFile, data, 0644)
 }
 
