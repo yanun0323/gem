@@ -18,6 +18,20 @@ type indexInfo struct {
 	IsUnique bool
 }
 
+func getTableName(model interface{}) string {
+	t := reflect.TypeOf(model)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	tableName := toSnakeCase(t.Name())
+	if nameable, ok := model.(nameable); ok {
+		tableName = nameable.TableName()
+	}
+
+	return tableName
+}
+
 // parseModel parses GORM model struct
 // Get the reflection type of the struct
 func parseModel(model interface{}) (tableName string, columns []string, indexes map[string]*indexInfo) {
@@ -27,10 +41,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		t = t.Elem()
 	}
 
-	tableName = toSnakeCase(t.Name())
-	if nameable, ok := model.(nameable); ok {
-		tableName = nameable.TableName()
-	}
+	tableName = getTableName(model)
 
 	columns = make([]string, 0)
 	indexes = make(map[string]*indexInfo)

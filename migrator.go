@@ -83,6 +83,12 @@ func New(config *Config) *migrator {
 // Returns the migrator instance for method chaining.
 func (m *migrator) AddModels(models ...interface{}) *migrator {
 	m.models = append(m.models, models...)
+
+	// sort by model name
+	sort.Slice(m.models, func(i, j int) bool {
+		return getTableName(m.models[i]) < getTableName(m.models[j])
+	})
+
 	return m
 }
 
@@ -100,6 +106,10 @@ func (m *migrator) AddModels(models ...interface{}) *migrator {
 //
 // Returns an error if any step fails during the process.
 func (m *migrator) Generate() error {
+	if len(m.models) == 0 {
+		return nil
+	}
+
 	if err := os.MkdirAll(m.conf.getExportDir(), 0755); err != nil {
 		return err
 	}

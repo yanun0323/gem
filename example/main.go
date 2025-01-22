@@ -33,8 +33,8 @@ func main() {
 		})
 
 		sql.AddModels(
-			model.Model{},
 			model.User{},
+			model.Model{},
 		)
 
 		if err := sql.Generate(); err != nil {
