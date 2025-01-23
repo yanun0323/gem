@@ -402,7 +402,7 @@ func (m *migrator) generateAlterStatements(tableName string, newSchema string, n
 	}
 
 	// Compare column differences
-	columnOps := m.compareColumns(oldDef.Columns, newDef.Columns)
+	columnOps := m.compareColumns(tableName, oldDef.Columns, newDef.Columns)
 	for _, op := range columnOps {
 		if op.Up != "" {
 			upStatements = append(upStatements, op.Up)
@@ -602,7 +602,7 @@ func removeDuplicates(elements []string) []string {
 }
 
 // compareColumns compares differences between two column definitions
-func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation {
+func (m *migrator) compareColumns(tableName string, oldCols, newCols []columnDef) []alterOperation {
 	var operations []alterOperation
 	oldColMap := make(map[string]columnDef)
 	newColMap := make(map[string]columnDef)
@@ -622,18 +622,18 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 			// New columns
 			operations = append(operations, alterOperation{
 				Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
-					name, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
+					tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
 				Down: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-					name, newCol.Name),
+					tableName, newCol.Name),
 			})
 		} else {
 			// Compare if column definition has changes
 			if !compareColumnDef(oldCol, newCol) {
 				operations = append(operations, alterOperation{
 					Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-						name, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
+						tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
 					Down: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-						name, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+						tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
 				})
 			}
 		}
@@ -645,9 +645,9 @@ func (m *migrator) compareColumns(oldCols, newCols []columnDef) []alterOperation
 			if _, exists := newColMap[name]; !exists {
 				operations = append(operations, alterOperation{
 					Up: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-						name, oldCol.Name),
+						tableName, oldCol.Name),
 					Down: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
-						name, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+						tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
 				})
 			}
 		}
