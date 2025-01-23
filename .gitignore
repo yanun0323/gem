@@ -12,4 +12,5 @@ go.work
 *.yaml
 *.build
 Makefile
+Makefile.env
 example/export

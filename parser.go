@@ -80,20 +80,20 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 			indexName := getTagValue(field, "index")
 			if indexName == "" {
 				// If there's only index tag without value, create a single-column index
-				indexName = fmt.Sprintf("idx_%s", toSnakeCase(field.Name))
+				indexName = fmt.Sprintf("idx_%s", getColumnName(field))
 				indexes[indexName] = &indexInfo{
 					Name:     indexName,
-					Columns:  []string{toSnakeCase(field.Name)},
+					Columns:  []string{getColumnName(field)},
 					IsUnique: false,
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
-					idx.Columns = append(idx.Columns, toSnakeCase(field.Name))
+					idx.Columns = append(idx.Columns, getColumnName(field))
 				} else {
 					indexes[indexName] = &indexInfo{
 						Name:     indexName,
-						Columns:  []string{toSnakeCase(field.Name)},
+						Columns:  []string{getColumnName(field)},
 						IsUnique: false,
 					}
 				}

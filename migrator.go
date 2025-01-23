@@ -149,15 +149,10 @@ func (m *migrator) Generate() error {
 		if t.Kind() == reflect.Ptr {
 			t = t.Elem()
 		}
-		modelName := toSnakeCase(t.Name())
 
-		// If it's a nameable interface, use the specified table name
-		if nameable, ok := model.(nameable); ok {
-			modelName = nameable.TableName()
-		}
-
+		tableName := getTableName(model)
 		newHash := m.generateHash(schema, indexes)
-		snapshot := m.findSnapshot(modelName)
+		snapshot := m.findSnapshot(tableName)
 
 		var (
 			filenames []string
@@ -165,22 +160,22 @@ func (m *migrator) Generate() error {
 
 		if snapshot == nil {
 			// New table
-			filenames, err = m.generateMigrationFile(timestamp, modelName, schema, indexes, true)
+			filenames, err = m.generateMigrationFile(timestamp, tableName, schema, indexes, true)
 			if err != nil {
 				return err
 			}
 			m.snapshots = append(m.snapshots, &modelSnapshot{
-				Name:    modelName,
+				Name:    tableName,
 				Hash:    newHash,
 				Schema:  schema,
 				Indexes: indexes,
 			})
 		} else if snapshot.Hash != newHash {
 			// Check if there are actual changes
-			upStatements, _ := m.generateAlterStatements(modelName, schema, indexes)
+			upStatements, _ := m.generateAlterStatements(tableName, schema, indexes)
 			if len(upStatements) > 0 {
 				// Only generate migration file when there are actual changes
-				filenames, err = m.generateMigrationFile(timestamp, modelName, schema, indexes, false)
+				filenames, err = m.generateMigrationFile(timestamp, tableName, schema, indexes, false)
 				if err != nil {
 					return err
 				}
@@ -303,7 +298,7 @@ func wrapDoNotEdit(s string) string {
 	return _textDoNotEdit + "\n--\n" + _textGeneratedBy + "\n\n" + s + "\n\n" + _textDoNotEdit
 }
 
-func (m *migrator) generateMigrationFile(timestamp int64, modelName string, schema string, indexes []string, isNew bool) ([]string, error) {
+func (m *migrator) generateMigrationFile(timestamp int64, tableName string, schema string, indexes []string, isNew bool) ([]string, error) {
 	var (
 		filename string
 		content  string
@@ -317,23 +312,23 @@ func (m *migrator) generateMigrationFile(timestamp int64, modelName string, sche
 		// Case of new table
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
 			if len(indexes) == 0 {
 				content = schema
 			} else {
 				content = schema + "\n" + joinStrings(indexes, "\n")
 			}
 		case Goose:
-			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
 			if len(indexes) == 0 {
 				content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
-					schema, modelName)
+					schema, tableName)
 			} else {
 				content = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
-					schema, joinStrings(indexes, "\n"), modelName)
+					schema, joinStrings(indexes, "\n"), tableName)
 			}
 		case GolangMigrate:
-			filename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, tableName)
 			if len(indexes) == 0 {
 				content = schema
 			} else {
@@ -341,28 +336,28 @@ func (m *migrator) generateMigrationFile(timestamp int64, modelName string, sche
 			}
 
 			hasDownfile = true
-			downfilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, modelName)
-			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
+			downfilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, tableName)
+			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
 		}
 	} else {
 		// Case of table modification
-		upStatements, downStatements := m.generateAlterStatements(modelName, schema, indexes)
+		upStatements, downStatements := m.generateAlterStatements(tableName, schema, indexes)
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
 			content = joinStrings(upStatements, "\n")
 		case Goose:
-			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
 			content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\n%s\n",
 				joinStrings(upStatements, "\n"),
 				joinStrings(downStatements, "\n"))
 		case GolangMigrate:
-			filename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, modelName)
+			filename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, tableName)
 			content = joinStrings(upStatements, "\n")
 
 			hasDownfile = true
-			downfilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, modelName)
-			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", modelName)
+			downfilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, tableName)
+			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
 		}
 	}
 
