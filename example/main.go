@@ -35,6 +35,7 @@ func main() {
 		sql.AddModels(
 			model.User{},
 			model.Model{},
+			model.UserEmbed{},
 		)
 
 		if err := sql.Generate(); err != nil {
