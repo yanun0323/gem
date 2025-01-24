@@ -17,6 +17,7 @@ Gem is a powerful database migration file generator for Go applications using [G
 - Preserves migration history
 - Supports complex data types and relationships
 - Handles embedded structs and custom table names
+- Supports table aliases through type aliasing
 
 ## Installation
 
@@ -51,6 +52,38 @@ func main() {
     })
 
     g.AddModels(User{})
+
+    if err := g.Generate(); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Alias Example
+
+```go
+package main
+
+type User struct {
+    ID   uint   `gorm:"primaryKey;autoIncrement"`
+    Name string `gorm:"size:255;not null"`
+}
+
+// UserAlias is an alias of User but uses a different table name
+type UserAlias User
+
+func (UserAlias) TableName() string {
+    return "users_alias"
+}
+
+func main() {
+    g := gem.New(&gem.Config{
+        Tool:    gem.Goose,
+        OutputPath: "./migrations",
+    })
+
+    // Generate migration files for both User and UserAlias
+    g.AddModels(User{}, UserAlias{})
 
     if err := g.Generate(); err != nil {
         log.Fatal(err)
