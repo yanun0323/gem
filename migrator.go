@@ -680,16 +680,16 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 			// New indexes
 			operations = append(operations, alterOperation{
 				Up:   newIdx.ToSQL(),
-				Down: fmt.Sprintf("DROP INDEX %s;", name),
+				Down: fmt.Sprintf("DROP INDEX %s ON `%s`;", name, newIdx.TableName),
 			})
 		} else {
 			// Compare if index definition has changes
 			if !compareIndexDef(oldIdx, newIdx) {
 				operations = append(operations, alterOperation{
-					Up: fmt.Sprintf("DROP INDEX %s;\n%s",
-						name, newIdx.ToSQL()),
-					Down: fmt.Sprintf("DROP INDEX %s;\n%s",
-						name, oldIdx.ToSQL()),
+					Up: fmt.Sprintf("DROP INDEX %s ON `%s`;\n%s",
+						name, newIdx.TableName, newIdx.ToSQL()),
+					Down: fmt.Sprintf("DROP INDEX %s ON `%s`;\n%s",
+						name, oldIdx.TableName, oldIdx.ToSQL()),
 				})
 			}
 		}
@@ -699,7 +699,7 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 	for name, oldIdx := range oldIndexMap {
 		if _, exists := newIndexMap[name]; !exists {
 			operations = append(operations, alterOperation{
-				Up:   fmt.Sprintf("DROP INDEX %s;", name),
+				Up:   fmt.Sprintf("DROP INDEX %s ON `%s`;", name, oldIdx.TableName),
 				Down: oldIdx.ToSQL(),
 			})
 		}

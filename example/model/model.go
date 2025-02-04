@@ -44,7 +44,7 @@ type Model struct {
 	Address Address `gorm:"embedded;embeddedPrefix:addr_"`
 
 	// Nullable fields
-	DeletedAt    sql.NullTime   `gorm:"column:deleted_at;index:idx_deleted_at_new"`
+	DeletedAt    sql.NullTime   `gorm:"column:deleted_at"`
 	OptionalData sql.NullString `gorm:"column:optional_data"`
 }
 
