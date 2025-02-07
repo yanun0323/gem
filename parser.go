@@ -153,9 +153,9 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 		}
 	}
 
-	if len(primaryKeyName) == 0 {
-		return "", nil, fmt.Errorf("require primary key in table (%s)", tableName)
-	}
+	// if len(primaryKeyName) == 0 {
+	// 	return "", nil, fmt.Errorf("require primary key in table (%s)", tableName)
+	// }
 
 	// If there's a primary key, add PRIMARY KEY constraint
 	if len(primaryKeyName) != 0 {
