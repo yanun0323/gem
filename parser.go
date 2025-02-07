@@ -28,9 +28,29 @@ func getTableName(model interface{}) string {
 	tableName := toSnakeCase(t.Name())
 	if nameable, ok := model.(nameable); ok {
 		tableName = nameable.TableName()
+	} else {
+		tableName = toPlural(tableName)
 	}
 
 	return tableName
+}
+
+func toPlural(s string) string {
+	if strings.HasSuffix(s, "s") || strings.HasSuffix(s, "x") ||
+		strings.HasSuffix(s, "z") || strings.HasSuffix(s, "ch") ||
+		strings.HasSuffix(s, "sh") {
+		return s + "es"
+	}
+	if strings.HasSuffix(s, "y") {
+		if len(s) > 1 {
+			lastChar := rune(s[len(s)-2])
+			if lastChar != 'a' && lastChar != 'e' && lastChar != 'i' &&
+				lastChar != 'o' && lastChar != 'u' {
+				return s[:len(s)-1] + "ies"
+			}
+		}
+	}
+	return s + "s"
 }
 
 // parseModel parses GORM model struct
