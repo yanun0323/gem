@@ -19,6 +19,7 @@ func main() {
 			model.Model{},
 			model.User{},
 			model.UserAlias{},
+			model.Address{},
 		)
 
 		if err := sql.Generate(); err != nil {
@@ -37,6 +38,7 @@ func main() {
 			model.User{},
 			model.Model{},
 			model.UserAlias{},
+			model.Address{},
 		)
 
 		if err := sql.Generate(); err != nil {

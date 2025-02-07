@@ -23,9 +23,9 @@ type Model struct {
 	// Various data types and constraints
 	Name        string    `gorm:"column:name;type:varchar(100);not null;uniqueIndex"`
 	Age         int       `gorm:"column:age;check:age > 0"`
-	Email       string    `gorm:"column:email;size:255;uniqueIndex:udx_email_score_is_active"`
-	Score       float64   `gorm:"column:score;precision:10;scale:2;default:0.00;uniqueIndex:udx_email_score_is_active"`
-	IsActive    bool      `gorm:"column:is_active;default:true;uniqueIndex:udx_email_score_is_active"`
+	Email       string    `gorm:"column:email;size:255;uniqueIndex:udx_is_active_email_score,priority:3"`
+	Score       float64   `gorm:"column:score;precision:10;scale:2;default:0.00;uniqueIndex:udx_is_active_email_score,priority:2"`
+	IsActive    bool      `gorm:"column:is_active;default:true;uniqueIndex:udx_is_active_email_score,priority:1"`
 	Birthday    time.Time `gorm:"column:birth_day;type:date;index"`
 	Description string    `gorm:"column:description;type:text;comment:User notes"`
 

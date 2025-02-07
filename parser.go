@@ -13,9 +13,10 @@ type nameable interface {
 }
 
 type indexInfo struct {
-	Name     string
-	Columns  []string
-	IsUnique bool
+	Name       string
+	Columns    []string
+	IsUnique   bool
+	Priorities map[string]int
 }
 
 func getTableName(model interface{}) string {
@@ -78,23 +79,38 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		// Handle indexes
 		if hasTag(field, "index") {
 			indexName := getTagValue(field, "index")
+			columnName := getColumnName(field)
+			priority := 0
+
+			// 檢查是否有 priority 後綴
+			if strings.Contains(indexName, ",priority:") {
+				parts := strings.Split(indexName, ",priority:")
+				indexName = parts[0]
+				if len(parts) > 1 {
+					fmt.Sscanf(parts[1], "%d", &priority)
+				}
+			}
+
 			if indexName == "" {
 				// If there's only index tag without value, create a single-column index
-				indexName = fmt.Sprintf("idx_%s", getColumnName(field))
+				indexName = fmt.Sprintf("idx_%s", columnName)
 				indexes[indexName] = &indexInfo{
-					Name:     indexName,
-					Columns:  []string{getColumnName(field)},
-					IsUnique: false,
+					Name:       indexName,
+					Columns:    []string{columnName},
+					IsUnique:   false,
+					Priorities: map[string]int{columnName: priority},
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
-					idx.Columns = append(idx.Columns, getColumnName(field))
+					idx.Columns = append(idx.Columns, columnName)
+					idx.Priorities[columnName] = priority
 				} else {
 					indexes[indexName] = &indexInfo{
-						Name:     indexName,
-						Columns:  []string{getColumnName(field)},
-						IsUnique: false,
+						Name:       indexName,
+						Columns:    []string{columnName},
+						IsUnique:   false,
+						Priorities: map[string]int{columnName: priority},
 					}
 				}
 			}
@@ -104,23 +120,37 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		if hasTag(field, "uniqueIndex") {
 			indexName := getTagValue(field, "uniqueIndex")
 			columnName := getColumnName(field)
+			priority := 0
+
+			// 檢查是否有 priority 後綴
+			if strings.Contains(indexName, ",priority:") {
+				parts := strings.Split(indexName, ",priority:")
+				indexName = parts[0]
+				if len(parts) > 1 {
+					fmt.Sscanf(parts[1], "%d", &priority)
+				}
+			}
+
 			if indexName == "" {
 				// If there's only uniqueIndex tag without value, create a single-column unique index
 				indexName = fmt.Sprintf("udx_%s", columnName)
 				indexes[indexName] = &indexInfo{
-					Name:     indexName,
-					Columns:  []string{columnName},
-					IsUnique: true,
+					Name:       indexName,
+					Columns:    []string{columnName},
+					IsUnique:   true,
+					Priorities: map[string]int{columnName: priority},
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
 				if idx, exists := indexes[indexName]; exists {
 					idx.Columns = append(idx.Columns, columnName)
+					idx.Priorities[columnName] = priority
 				} else {
 					indexes[indexName] = &indexInfo{
-						Name:     indexName,
-						Columns:  []string{columnName},
-						IsUnique: true,
+						Name:       indexName,
+						Columns:    []string{columnName},
+						IsUnique:   true,
+						Priorities: map[string]int{columnName: priority},
 					}
 				}
 			}
@@ -170,14 +200,39 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 	// Generate index statements
 	var indexStatements []string
 	for _, idx := range indexes {
+		// 根據優先級排序列名
+		type columnPriority struct {
+			name     string
+			priority int
+		}
+
+		sortedColumns := make([]columnPriority, 0, len(idx.Columns))
+		for _, col := range idx.Columns {
+			priority := idx.Priorities[col]
+			sortedColumns = append(sortedColumns, columnPriority{col, priority})
+		}
+
+		// 如果有優先級，按優先級排序；否則保持原順序
+		if len(idx.Priorities) > 0 {
+			sort.SliceStable(sortedColumns, func(i, j int) bool {
+				return sortedColumns[i].priority < sortedColumns[j].priority
+			})
+		}
+
+		// 提取排序後的列名
+		orderedColumns := make([]string, len(sortedColumns))
+		for i, col := range sortedColumns {
+			orderedColumns[i] = col.name
+		}
+
 		if idx.IsUnique {
 			indexStatements = append(indexStatements,
 				fmt.Sprintf("CREATE UNIQUE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(idx.Columns, "`, `")))
+					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
 		} else {
 			indexStatements = append(indexStatements,
 				fmt.Sprintf("CREATE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(idx.Columns, "`, `")))
+					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
 		}
 	}
 
