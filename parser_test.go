@@ -52,7 +52,7 @@ func TestParseModel(t *testing.T) {
 		{
 			name:         "Customer Model with Embedded Structure",
 			model:        Customer{},
-			wantTable:    "customer",
+			wantTable:    "customers",
 			wantColCount: 5,
 			wantIdxCount: 0,
 		},
