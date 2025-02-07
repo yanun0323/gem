@@ -324,11 +324,7 @@ func getSQLType(field reflect.StructField) string {
 	case reflect.Int64:
 		sqlType = "BIGINT"
 	case reflect.Uint:
-		if field.Name == "ID" {
-			sqlType = "INTEGER"
-		} else {
-			sqlType = "INTEGER UNSIGNED"
-		}
+		sqlType = "INTEGER UNSIGNED"
 	case reflect.Uint8:
 		sqlType = "TINYINT UNSIGNED"
 	case reflect.Uint16:
