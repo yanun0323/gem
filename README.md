@@ -103,6 +103,8 @@ type Config struct {
 
 ### Supported GORM Tags
 
+[!IMPORTANT] GORM tags are case sensitive, please refer to [tag.md](tag.md) for the correct usage.
+
 |   Tag Name    | Description                     |
 | :-----------: | :------------------------------ |
 |    column     | Column database name            |
