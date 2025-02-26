@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -143,11 +142,6 @@ func (m *migrator) Generate() error {
 		schema, indexes, err := parseModelToSQLWithIndexes(model)
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
-		}
-
-		t := reflect.TypeOf(model)
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
 		}
 
 		tableName := getTableName(model)
@@ -732,25 +726,4 @@ func compareIndexDef(old, new *indexDef) bool {
 		}
 	}
 	return true
-}
-
-// normalizeIndex normalizes index definition
-func normalizeIndex(idx string) string {
-	// Remove extra whitespace and newlines
-	return strings.Join(strings.Fields(idx), " ")
-}
-
-// extractIndexName extracts index name from index definition
-func extractIndexName(idx string) string {
-	parts := strings.Fields(idx)
-	startIdx := 2
-	if len(parts) >= 3 {
-		if strings.ToUpper(parts[1]) == "UNIQUE" {
-			startIdx = 3
-		}
-		if len(parts) > startIdx && strings.ToUpper(parts[0]) == "CREATE" {
-			return parts[startIdx]
-		}
-	}
-	return ""
 }
