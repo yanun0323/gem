@@ -213,7 +213,7 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 	}
 
 	// Generate CREATE TABLE statement
-	createTable := fmt.Sprintf("CREATE TABLE `%s` (\n  %s\n);",
+	createTable := fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s` (\n  %s\n);",
 		tableName,
 		strings.Join(columns, ",\n  "))
 
@@ -477,7 +477,7 @@ func getTagValue(field reflect.StructField, key string) string {
 func hasTag(field reflect.StructField, key string) bool {
 	tag := field.Tag.Get("gorm")
 	for _, option := range strings.Split(tag, ";") {
-		if option == key || strings.HasPrefix(option, key+":") {
+		if strings.EqualFold(option, key) || strings.HasPrefix(option, key+":") {
 			return true
 		}
 	}
@@ -489,16 +489,4 @@ func getColumnName(field reflect.StructField) string {
 		return columnName
 	}
 	return toSnakeCase(field.Name)
-}
-
-// Add new helper function to check if there's a specified value tag
-func hasTagValue(field reflect.StructField, key string) bool {
-	tag := field.Tag.Get("gorm")
-	for _, option := range strings.Split(tag, ";") {
-		kv := strings.SplitN(option, ":", 2)
-		if kv[0] == key && len(kv) == 2 && kv[1] != "" {
-			return true
-		}
-	}
-	return false
 }

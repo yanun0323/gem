@@ -454,7 +454,7 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	sql = strings.TrimSpace(sql)
 
 	// Parse table name
-	tableNameRegex := regexp.MustCompile(`CREATE TABLE ` + "`" + `(\w+)` + "`" + ` \(([\s\S]+)\);`)
+	tableNameRegex := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS ` + "`" + `(\w+)` + "`" + ` \(([\s\S]+)\);`)
 	matches := tableNameRegex.FindStringSubmatch(sql)
 	if len(matches) != 3 {
 		return nil, fmt.Errorf("invalid CREATE TABLE syntax")

@@ -84,7 +84,7 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 	}
 
 	// Validate CREATE TABLE statement
-	if !strings.Contains(createTable, "CREATE TABLE `users`") {
+	if !strings.Contains(createTable, "CREATE TABLE IF NOT EXISTS `users`") {
 		t.Fatal("Invalid CREATE TABLE statement format")
 	}
 
