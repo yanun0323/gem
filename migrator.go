@@ -52,6 +52,15 @@ type Config struct {
 	//
 	// Default: false
 	KeepDroppedColumn bool
+
+	// RawSQLAggregation determines whether to aggregate multiple models into a single migration file.
+	// When set to true, all models will be aggregated into a single migration file.
+	// When set to false, each model will have its own migration file.
+	//
+	//	- Note: This option is only applicable when using the RawSQL tool.
+	//
+	// Default: false
+	RawSQLAggregation bool
 }
 
 func (c *Config) getExportDir() string {
@@ -122,7 +131,8 @@ func (m *migrator) Generate() error {
 		return err
 	}
 
-	timestamp, err := strconv.ParseInt(time.Now().Format("20060102150405"), 10, 64)
+	now := time.Now()
+	timestamp, err := strconv.ParseInt(now.Format("20060102150405"), 10, 64)
 	if err != nil {
 		return fmt.Errorf("parse timestamp, err: %w", err)
 	}
@@ -136,6 +146,9 @@ func (m *migrator) Generate() error {
 	}
 
 	log.Println("...\tStart generating migration.")
+
+	infos := make([]migrationFileInfo, 0, len(m.models))
+
 	for _, model := range m.models {
 		timestamp++
 
@@ -148,16 +161,10 @@ func (m *migrator) Generate() error {
 		newHash := m.generateHash(schema, indexes)
 		snapshot := m.findSnapshot(tableName)
 
-		var (
-			filenames []string
-		)
-
 		if snapshot == nil {
 			// New table
-			filenames, err = m.generateMigrationFile(timestamp, tableName, schema, indexes, true)
-			if err != nil {
-				return err
-			}
+			info := m.generateMigrationFileInfo(timestamp, tableName, schema, indexes, true)
+			infos = append(infos, info)
 			m.snapshots = append(m.snapshots, &modelSnapshot{
 				Name:    tableName,
 				Hash:    newHash,
@@ -169,19 +176,54 @@ func (m *migrator) Generate() error {
 			upStatements, _ := m.generateAlterStatements(tableName, schema, indexes)
 			if len(upStatements) > 0 {
 				// Only generate migration file when there are actual changes
-				filenames, err = m.generateMigrationFile(timestamp, tableName, schema, indexes, false)
-				if err != nil {
-					return err
-				}
+				info := m.generateMigrationFileInfo(timestamp, tableName, schema, indexes, false)
+				infos = append(infos, info)
 				snapshot.Hash = newHash
 				snapshot.Schema = schema
 				snapshot.Indexes = indexes
 			}
 		}
+	}
 
-		for _, f := range filenames {
-			log.Default().Printf("OK\t%s", f)
+	aggregateContent := &strings.Builder{}
+
+	for _, info := range infos {
+		if m.conf.RawSQLAggregation {
+			aggregateContent.WriteByte('\n')
+			aggregateContent.WriteString(info.upContent)
+			aggregateContent.WriteByte('\n')
+			aggregateContent.WriteByte('\n')
+		} else {
+			if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), info.upFilename), []byte(info.wrapDoNotEditUpContent()), 0644); err != nil {
+				return fmt.Errorf("write (%s), err: %w", info.upFilename, err)
+			}
+
+			if len(info.downFilename) != 0 {
+				if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), info.downFilename), []byte(info.wrapDoNotEditDownContent()), 0644); err != nil {
+					return fmt.Errorf("write (%s), err: %w", info.downFilename, err)
+				}
+			}
+
+			log.Default().Printf("OK\t%s", info.upFilename)
 		}
+	}
+
+	if m.conf.RawSQLAggregation && aggregateContent.Len() != 0 {
+		filename := filepath.Join(m.conf.getExportDir(), "aggregation.sql")
+		f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("open (%s), err: %w", filename, err)
+		}
+		defer f.Close()
+
+		header := fmt.Sprintf("\n\n-- %s\n-- Generate by https://github.com/yanun0323/gem\n", now.Format("2006-01-02 15:04:05"))
+		content := header + aggregateContent.String()
+
+		if _, err := f.WriteString(content); err != nil {
+			return fmt.Errorf("write (%s), err: %w", filename, err)
+		}
+
+		log.Default().Printf("OK\t%s", filename)
 	}
 
 	log.Println("\tGenerate migration done.")
@@ -292,13 +334,27 @@ func wrapDoNotEdit(s string) string {
 	return _textDoNotEdit + "\n--\n" + _textGeneratedBy + "\n\n" + s + "\n\n" + _textDoNotEdit
 }
 
-func (m *migrator) generateMigrationFile(timestamp int64, tableName string, schema string, indexes []string, isNew bool) ([]string, error) {
-	var (
-		filename string
-		content  string
+type migrationFileInfo struct {
+	upFilename   string
+	downFilename string
+	upContent    string
+	downContent  string
+}
 
-		hasDownfile  bool
-		downfilename string
+func (m *migrationFileInfo) wrapDoNotEditUpContent() string {
+	return wrapDoNotEdit(m.upContent)
+}
+
+func (m *migrationFileInfo) wrapDoNotEditDownContent() string {
+	return wrapDoNotEdit(m.downContent)
+}
+
+func (m *migrator) generateMigrationFileInfo(timestamp int64, tableName string, schema string, indexes []string, isNew bool) migrationFileInfo {
+	var (
+		upFilename string
+		upContent  string
+
+		downFilename string
 		downContent  string
 	)
 
@@ -306,31 +362,30 @@ func (m *migrator) generateMigrationFile(timestamp int64, tableName string, sche
 		// Case of new table
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
+			upFilename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
 			if len(indexes) == 0 {
-				content = schema
+				upContent = schema
 			} else {
-				content = schema + "\n" + joinStrings(indexes, "\n")
+				upContent = schema + "\n" + joinStrings(indexes, "\n")
 			}
 		case Goose:
-			filename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
+			upFilename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
 			if len(indexes) == 0 {
-				content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
+				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
 					schema, tableName)
 			} else {
-				content = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
+				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
 					schema, joinStrings(indexes, "\n"), tableName)
 			}
 		case GolangMigrate:
-			filename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, tableName)
+			upFilename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, tableName)
 			if len(indexes) == 0 {
-				content = schema
+				upContent = schema
 			} else {
-				content = schema + "\n\n" + joinStrings(indexes, "\n")
+				upContent = schema + "\n\n" + joinStrings(indexes, "\n")
 			}
 
-			hasDownfile = true
-			downfilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, tableName)
+			downFilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, tableName)
 			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
 		}
 	} else {
@@ -338,38 +393,30 @@ func (m *migrator) generateMigrationFile(timestamp int64, tableName string, sche
 		upStatements, downStatements := m.generateAlterStatements(tableName, schema, indexes)
 		switch m.conf.Tool {
 		case RawSQL:
-			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
-			content = joinStrings(upStatements, "\n")
+			upFilename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
+			upContent = joinStrings(upStatements, "\n")
 		case Goose:
-			filename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
-			content = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\n%s\n",
+			upFilename = fmt.Sprintf("%d_alter_%s.sql", timestamp, tableName)
+			upContent = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\n%s\n",
 				joinStrings(upStatements, "\n"),
 				joinStrings(downStatements, "\n"))
 		case GolangMigrate:
-			filename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, tableName)
-			content = joinStrings(upStatements, "\n")
+			upFilename = fmt.Sprintf("%d_alter_%s.up.sql", timestamp, tableName)
+			upContent = joinStrings(upStatements, "\n")
 
-			hasDownfile = true
-			downfilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, tableName)
+			downFilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, tableName)
 			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
 		}
 	}
 
-	content = wrapDoNotEdit(content)
-	if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), filename), []byte(content), 0644); err != nil {
-		return nil, fmt.Errorf("write (%s), err: %w", filename, err)
+	info := migrationFileInfo{
+		upFilename:   upFilename,
+		upContent:    upContent,
+		downFilename: downFilename,
+		downContent:  downContent,
 	}
 
-	if !hasDownfile {
-		return []string{filename}, nil
-	}
-
-	downContent = wrapDoNotEdit(downContent)
-	if err := os.WriteFile(filepath.Join(m.conf.getExportDir(), downfilename), []byte(downContent), 0644); err != nil {
-		return nil, fmt.Errorf("write (%s), err: %w", filename, err)
-	}
-
-	return []string{filename, downfilename}, nil
+	return info
 }
 
 func (m *migrator) generateAlterStatements(tableName string, newSchema string, newIndexes []string) (upStatements []string, downStatements []string) {

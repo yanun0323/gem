@@ -20,6 +20,10 @@ type Model struct {
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt int64     `gorm:"column:updated_at;type:bigint;autoUpdateTime"`
 
+	// Addon int `gorm:"column:addon;type:int;default:0"`
+	// Addon2 int `gorm:"column:addon2;type:int;default:0"`
+	// Addon3 int `gorm:"column:addon3;type:int;default:0"`
+
 	// Various data types and constraints
 	Name        string    `gorm:"column:name;type:varchar(100);NOT NULL;uniqueIndex"`
 	Age         int       `gorm:"column:age;check:age > 0"`

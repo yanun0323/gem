@@ -45,4 +45,43 @@ func main() {
 			log.Fatalf("run migrator, err: %+v", err)
 		}
 	}
+
+	{
+		sql := gem.New(&gem.Config{
+			Tool:              gem.RawSQL,
+			OutputPath:        "./example/export/raw_sql",
+			KeepDroppedColumn: true,
+		})
+
+		sql.AddModels(
+			model.User{},
+			model.Model{},
+			model.UserAlias{},
+			model.Address{},
+		)
+
+		if err := sql.Generate(); err != nil {
+			log.Fatalf("run migrator, err: %+v", err)
+		}
+	}
+
+	{
+		sql := gem.New(&gem.Config{
+			Tool:              gem.RawSQL,
+			OutputPath:        "./example/export/raw_sql_aggregation",
+			KeepDroppedColumn: false,
+			RawSQLAggregation: true,
+		})
+
+		sql.AddModels(
+			model.User{},
+			model.Model{},
+			model.UserAlias{},
+			model.Address{},
+		)
+
+		if err := sql.Generate(); err != nil {
+			log.Fatalf("run migrator, err: %+v", err)
+		}
+	}
 }
