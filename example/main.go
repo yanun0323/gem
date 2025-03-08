@@ -63,7 +63,25 @@ func main() {
 			log.Fatalf("run migrator, err: %+v", err)
 		}
 	}
+	{
+		sql := gem.New(&gem.Config{
+			Tool:              gem.GolangMigrate,
+			QuoteChar:         '"',
+			OutputPath:        "./example/export/go_migrate_double_dash",
+			KeepDroppedColumn: true,
+		})
 
+		sql.AddModels(
+			model.User{},
+			model.Model{},
+			model.UserAlias{},
+			model.Address{},
+		)
+
+		if err := sql.Generate(); err != nil {
+			log.Fatalf("run migrator, err: %+v", err)
+		}
+	}
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.RawSQL,
@@ -82,7 +100,6 @@ func main() {
 			log.Fatalf("run migrator, err: %+v", err)
 		}
 	}
-
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.RawSQL,
