@@ -2,6 +2,7 @@ package gem
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -36,90 +37,298 @@ type Customer struct {
 
 func TestParseModel(t *testing.T) {
 	tests := []struct {
-		name         string
-		model        interface{}
-		wantTable    string
-		wantColCount int
-		wantIdxCount int
+		name      string
+		model     interface{}
+		quoteChar rune
+		wantCols  []string
 	}{
 		{
-			name:         "Basic User Model",
-			model:        User{},
-			wantTable:    "users",
-			wantColCount: 6,
-			wantIdxCount: 2,
+			name:      "MySQL style quotes",
+			model:     User{},
+			quoteChar: '`',
+			wantCols: []string{
+				"`id` INTEGER UNSIGNED AUTO_INCREMENT NOT NULL",
+				"`name` VARCHAR(100) NOT NULL",
+				"`email_address` VARCHAR(150) NOT NULL",
+				"`age` INTEGER NULL DEFAULT 18",
+				"`created_at` DATETIME NOT NULL",
+				"`updated_at` DATETIME NOT NULL",
+			},
 		},
 		{
-			name:         "Customer Model with Embedded Structure",
-			model:        Customer{},
-			wantTable:    "customers",
-			wantColCount: 5,
-			wantIdxCount: 0,
+			name:      "PostgreSQL style quotes",
+			model:     User{},
+			quoteChar: '"',
+			wantCols: []string{
+				"\"id\" INTEGER UNSIGNED AUTO_INCREMENT NOT NULL",
+				"\"name\" VARCHAR(100) NOT NULL",
+				"\"email_address\" VARCHAR(150) NOT NULL",
+				"\"age\" INTEGER NULL DEFAULT 18",
+				"\"created_at\" DATETIME NOT NULL",
+				"\"updated_at\" DATETIME NOT NULL",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tableName, columns, indexes := parseModel(tt.model)
+			tableName, columns, indexes := parseModel(tt.model, tt.quoteChar)
 
-			if tableName != tt.wantTable {
-				t.Fatalf("Table name mismatch, got %v, want %v", tableName, tt.wantTable)
+			// Verify table name
+			if tableName != "users" {
+				t.Errorf("parseModel() tableName = %v, want %v", tableName, "users")
 			}
 
-			if len(columns) != tt.wantColCount {
-				t.Fatalf("Column count mismatch, got %v, want %v", len(columns), tt.wantColCount)
+			// Verify columns
+			for _, wantCol := range tt.wantCols {
+				found := false
+				for _, col := range columns {
+					if strings.TrimSpace(col) == strings.TrimSpace(wantCol) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("parseModel() missing or incorrect column\nwant: %v\ngot columns: %v", wantCol, columns)
+				}
 			}
 
-			if len(indexes) != tt.wantIdxCount {
-				t.Fatalf("Index count mismatch, got %v, want %v", len(indexes), tt.wantIdxCount)
+			// Verify indexes
+			if len(indexes) != 2 {
+				t.Errorf("parseModel() got %v indexes, want 2", len(indexes))
+			}
+
+			// Check name index
+			if idx, ok := indexes["idx_name"]; !ok {
+				t.Error("parseModel() missing name index")
+			} else if !containsColumn(idx.Columns, "name") {
+				t.Error("parseModel() name index doesn't contain 'name' column")
+			}
+
+			// Check email unique index
+			if idx, ok := indexes["udx_email_address"]; !ok {
+				t.Error("parseModel() missing email_address unique index")
+			} else if !idx.IsUnique {
+				t.Error("parseModel() email_address index should be unique")
+			} else if !containsColumn(idx.Columns, "email_address") {
+				t.Error("parseModel() email_address index doesn't contain 'email_address' column")
 			}
 		})
 	}
 }
 
+func containsColumn(columns []string, target string) bool {
+	for _, col := range columns {
+		if col == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestParseModelToSQLWithIndexes(t *testing.T) {
-	createTable, indexes, err := parseModelToSQLWithIndexes(User{})
-	if err != nil {
-		t.Fatalf("Failed to parse model: %v", err)
+	tests := []struct {
+		name      string
+		model     interface{}
+		quoteChar rune
+		wantTable string
+		wantIndex []string
+	}{
+		{
+			name:      "MySQL style quotes",
+			model:     User{},
+			quoteChar: '`',
+			wantTable: "CREATE TABLE IF NOT EXISTS `users` (",
+			wantIndex: []string{
+				"CREATE INDEX idx_name ON `users` (`name`);",
+				"CREATE UNIQUE INDEX udx_email_address ON `users` (`email_address`);",
+			},
+		},
+		{
+			name:      "PostgreSQL style quotes",
+			model:     User{},
+			quoteChar: '"',
+			wantTable: "CREATE TABLE IF NOT EXISTS \"users\" (",
+			wantIndex: []string{
+				"CREATE INDEX idx_name ON \"users\" (\"name\");",
+				"CREATE UNIQUE INDEX udx_email_address ON \"users\" (\"email_address\");",
+			},
+		},
+		{
+			name:      "Default style (MySQL) when quoteChar is 0",
+			model:     User{},
+			quoteChar: 0,
+			wantTable: "CREATE TABLE IF NOT EXISTS `users` (",
+			wantIndex: []string{
+				"CREATE INDEX idx_name ON `users` (`name`);",
+				"CREATE UNIQUE INDEX udx_email_address ON `users` (`email_address`);",
+			},
+		},
 	}
 
-	// Validate CREATE TABLE statement
-	if !strings.Contains(createTable, "CREATE TABLE IF NOT EXISTS `users`") {
-		t.Fatal("Invalid CREATE TABLE statement format")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			createTable, indexes, err := parseModelToSQLWithIndexes(tt.model, tt.quoteChar)
+			if err != nil {
+				t.Fatalf("Failed to parse model: %v", err)
+			}
+
+			// Validate CREATE TABLE statement
+			if !strings.HasPrefix(createTable, tt.wantTable) {
+				t.Errorf("Invalid CREATE TABLE statement format\nwant prefix: %s\ngot: %s", tt.wantTable, createTable)
+			}
+
+			// Validate if all necessary columns are included with correct quotes
+			requiredColumns := []string{
+				"id",
+				"name",
+				"email_address",
+				"age",
+				"created_at",
+				"updated_at",
+			}
+
+			for _, col := range requiredColumns {
+				quotedCol := quote(col, tt.quoteChar)
+				if !strings.Contains(createTable, quotedCol) {
+					t.Errorf("Missing column %s (quoted as %s)", col, quotedCol)
+				}
+			}
+
+			// Validate index count
+			if len(indexes) != len(tt.wantIndex) {
+				t.Fatalf("Incorrect index count, expected %d, got %d", len(tt.wantIndex), len(indexes))
+			}
+
+			// Sort both expected and actual indexes for comparison
+			sort.Strings(tt.wantIndex)
+			sort.Strings(indexes)
+
+			for i, index := range indexes {
+				if index != tt.wantIndex[i] {
+					t.Errorf("Index Mismatch\nexpected: %s\nbut got : %s", tt.wantIndex[i], index)
+				}
+			}
+		})
+	}
+}
+
+func TestQuote(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		quoteChar rune
+		want      string
+	}{
+		{
+			name:      "MySQL style quote",
+			input:     "column_name",
+			quoteChar: '`',
+			want:      "`column_name`",
+		},
+		{
+			name:      "PostgreSQL style quote",
+			input:     "column_name",
+			quoteChar: '"',
+			want:      "\"column_name\"",
+		},
+		{
+			name:      "MSSQL style quote",
+			input:     "column_name",
+			quoteChar: '[',
+			want:      "[column_name]",
+		},
+		{
+			name:      "Default quote (MySQL) when quoteChar is 0",
+			input:     "column_name",
+			quoteChar: 0,
+			want:      "`column_name`",
+		},
 	}
 
-	// Validate if all necessary columns are included
-	requiredColumns := []string{
-		"`id`",
-		"`name`",
-		"`email_address`",
-		"`age`",
-		"`created_at`",
-		"`updated_at`",
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := quote(tt.input, tt.quoteChar)
+			if got != tt.want {
+				t.Errorf("quote() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseField(t *testing.T) {
+	type TestStruct struct {
+		Name        string    `gorm:"size:255;not null"`
+		Email       string    `gorm:"unique;size:100"`
+		Age         int       `gorm:"type:integer"`
+		OptionalPtr *string   `gorm:"size:50"`
+		CreatedAt   time.Time `gorm:"autoCreateTime;comment:'Creation time'"`
 	}
 
-	for _, col := range requiredColumns {
-		if !strings.Contains(createTable, col) {
-			t.Fatalf("Missing column %s", col)
-		}
+	testType := reflect.TypeOf(TestStruct{})
+	tests := []struct {
+		name      string
+		field     string
+		quoteChar rune
+		contains  []string
+	}{
+		{
+			name:      "MySQL quotes with constraints",
+			field:     "Name",
+			quoteChar: '`',
+			contains: []string{
+				"`name`",
+				"VARCHAR(255)",
+				"NOT NULL",
+			},
+		},
+		{
+			name:      "PostgreSQL quotes with constraints",
+			field:     "Name",
+			quoteChar: '"',
+			contains: []string{
+				"\"name\"",
+				"VARCHAR(255)",
+				"NOT NULL",
+			},
+		},
+		{
+			name:      "Nullable pointer field",
+			field:     "OptionalPtr",
+			quoteChar: '`',
+			contains: []string{
+				"`optional_ptr`",
+				"VARCHAR(50)",
+				"NULL",
+			},
+		},
+		{
+			name:      "Field with comment",
+			field:     "CreatedAt",
+			quoteChar: '"',
+			contains: []string{
+				"\"created_at\"",
+				"DATETIME",
+				"COMMENT 'Creation time'",
+			},
+		},
 	}
 
-	expectedIndex := []string{
-		"CREATE INDEX idx_name ON `users` (`name`);",
-		"CREATE UNIQUE INDEX udx_email_address ON `users` (`email_address`);",
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, found := testType.FieldByName(tt.field)
+			if !found {
+				t.Fatalf("Field %s not found", tt.field)
+			}
+			got := parseField(field, tt.quoteChar)
 
-	// Validate index count
-	if len(indexes) != len(expectedIndex) {
-		t.Fatalf("Incorrect index count, expected 2, got %d", len(indexes))
+			for _, want := range tt.contains {
+				if !strings.Contains(got, want) {
+					t.Errorf("parseField() = %v, should contain %v", got, want)
+				}
+			}
+		})
 	}
-
-	for i, index := range indexes {
-		if !strings.Contains(index, expectedIndex[i]) {
-			t.Fatalf("Index Mismatch\nexpected: %s\nbut got : %s\n", expectedIndex[i], index)
-		}
-	}
-
 }
 
 func TestGetSQLType(t *testing.T) {

@@ -40,6 +40,12 @@ type Config struct {
 	// Default: RawSQL
 	Tool MigrationTool
 
+	// QuoteChar specifies the quote character to use for SQL identifiers.
+	// For MySQL use backtick (`), for PostgreSQL use double quote (")
+	//
+	// Default: ` (backtick for MySQL)
+	QuoteChar rune
+
 	// OutputPath specifies the directory path where migration files will be stored.
 	// The path can be either absolute or relative to the current working directory.
 	//
@@ -152,7 +158,7 @@ func (m *migrator) Generate() error {
 	for _, model := range m.models {
 		timestamp++
 
-		schema, indexes, err := parseModelToSQLWithIndexes(model)
+		schema, indexes, err := parseModelToSQLWithIndexes(model, m.conf.QuoteChar)
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
 		}
@@ -371,11 +377,11 @@ func (m *migrator) generateMigrationFileInfo(timestamp int64, tableName string, 
 		case Goose:
 			upFilename = fmt.Sprintf("%d_create_%s.sql", timestamp, tableName)
 			if len(indexes) == 0 {
-				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
-					schema, tableName)
+				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS %s;\n",
+					schema, quote(tableName, m.conf.QuoteChar))
 			} else {
-				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS `%s`;\n",
-					schema, joinStrings(indexes, "\n"), tableName)
+				upContent = fmt.Sprintf("-- +goose Up\n%s\n\n%s\n\n-- +goose Down\nDROP TABLE IF EXISTS %s;\n",
+					schema, joinStrings(indexes, "\n"), quote(tableName, m.conf.QuoteChar))
 			}
 		case GolangMigrate:
 			upFilename = fmt.Sprintf("%d_create_%s.up.sql", timestamp, tableName)
@@ -386,7 +392,7 @@ func (m *migrator) generateMigrationFileInfo(timestamp int64, tableName string, 
 			}
 
 			downFilename = fmt.Sprintf("%d_create_%s.down.sql", timestamp, tableName)
-			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
+			downContent = fmt.Sprintf("DROP TABLE IF EXISTS %s;", quote(tableName, m.conf.QuoteChar))
 		}
 	} else {
 		// Case of table modification
@@ -405,7 +411,7 @@ func (m *migrator) generateMigrationFileInfo(timestamp int64, tableName string, 
 			upContent = joinStrings(upStatements, "\n")
 
 			downFilename = fmt.Sprintf("%d_alter_%s.down.sql", timestamp, tableName)
-			downContent = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", tableName)
+			downContent = joinStrings(downStatements, "\n")
 		}
 	}
 

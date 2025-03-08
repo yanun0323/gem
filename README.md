@@ -8,6 +8,11 @@ Gem is a powerful database migration file generator for Go applications using [G
   - Raw SQL
   - [Goose](https://github.com/pressly/goose)
   - [Golang-Migrate](https://github.com/golang-migrate/migrate)
+- Customizable SQL identifier quoting:
+  - MySQL: backtick (`)
+  - PostgreSQL: double quote (")
+  - MSSQL: square brackets ([ ])
+  - Default: MySQL style backtick (`)
 - Automatically generates:
   - Table creation statements
   - Column definitions with constraints
@@ -96,8 +101,51 @@ func main() {
 ```go
 type Config struct {
     Tool              MigrationTool // Goose, GolangMigrate, or RawSQL
-    OutputPath         string       // Directory to store migration files
-    KeepDroppedColumn bool          // Keep dropped columns in down migrations
+    QuoteChar         rune         // SQL identifier quote character (default: ` for MySQL)
+    OutputPath        string       // Directory to store migration files
+    KeepDroppedColumn bool         // Keep dropped columns in down migrations
+}
+```
+
+### Example with Different SQL Dialects
+
+```go
+package main
+
+import (
+    "log"
+    "github.com/yanun0323/gem"
+)
+
+func main() {
+    // PostgreSQL style
+    pgGen := gem.New(&gem.Config{
+        Tool:      gem.Goose,
+        QuoteChar: '"',           // Use PostgreSQL style quotes
+        OutputPath: "./migrations",
+    })
+
+    // MSSQL style
+    msGen := gem.New(&gem.Config{
+        Tool:      gem.Goose,
+        QuoteChar: '[',           // Use MSSQL style quotes
+        OutputPath: "./migrations",
+    })
+
+    // MySQL style (default)
+    myGen := gem.New(&gem.Config{
+        Tool:      gem.Goose,
+        QuoteChar: '`',           // Use MySQL style quotes (or omit for default)
+        OutputPath: "./migrations",
+    })
+
+    // Use the appropriate generator based on your database
+    g := pgGen // or msGen or myGen
+    g.AddModels(User{})
+
+    if err := g.Generate(); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
