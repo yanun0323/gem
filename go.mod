@@ -1,3 +1,3 @@
-module github.com/slighter12/gem
+module github.com/yanun0323/gem
 
 go 1.16

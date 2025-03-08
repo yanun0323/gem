@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 
-	"github.com/slighter12/gem"
-	"github.com/slighter12/gem/example/model"
+	"github.com/yanun0323/gem"
+	"github.com/yanun0323/gem/example/model"
 )
 
 func main() {
