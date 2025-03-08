@@ -1,10 +1,5 @@
 # Gem
 
-This is a fork of [yanun0323/gem](https://github.com/yanun0323/gem) with added support for customizable SQL identifier quote characters, allowing compatibility with different SQL dialects:
-- MySQL: backtick (`)
-- PostgreSQL: double quote (")
-- MSSQL: square brackets ([ ])
-
 Gem is a powerful database migration file generator for Go applications using [GORM](https://gorm.io) tags. It simplifies the process of creating database migration files by automatically generating SQL statements based on your Go struct definitions.
 
 ## Features
