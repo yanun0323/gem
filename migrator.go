@@ -40,6 +40,12 @@ type Config struct {
 	// Default: RawSQL
 	Tool MigrationTool
 
+	// QuoteChar specifies the quote character to use for SQL identifiers.
+	// For MySQL use backtick (`), for PostgreSQL use double quote (")
+	//
+	// Default: ` (backtick for MySQL)
+	QuoteChar rune
+
 	// OutputPath specifies the directory path where migration files will be stored.
 	// The path can be either absolute or relative to the current working directory.
 	//
@@ -152,7 +158,7 @@ func (m *migrator) Generate() error {
 	for _, model := range m.models {
 		timestamp++
 
-		schema, indexes, err := parseModelToSQLWithIndexes(model)
+		schema, indexes, err := parseModelToSQLWithIndexes(model, m.conf.QuoteChar)
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
 		}

@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 
-	"github.com/yanun0323/gem"
-	"github.com/yanun0323/gem/example/model"
+	"github.com/slighter12/gem"
+	"github.com/slighter12/gem/example/model"
 )
 
 func main() {
@@ -26,7 +26,25 @@ func main() {
 			log.Fatalf("run migrator, err: %+v", err)
 		}
 	}
+	{
+		sql := gem.New(&gem.Config{
+			Tool:              gem.Goose,
+			QuoteChar:         '"',
+			OutputPath:        "./example/export/goose_double_dash",
+			KeepDroppedColumn: true,
+		})
 
+		sql.AddModels(
+			model.Model{},
+			model.User{},
+			model.UserAlias{},
+			model.Address{},
+		)
+
+		if err := sql.Generate(); err != nil {
+			log.Fatalf("run migrator, err: %+v", err)
+		}
+	}
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.GolangMigrate,
