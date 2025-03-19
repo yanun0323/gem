@@ -19,8 +19,7 @@ type Model struct {
 	UUID      string    `gorm:"column:uuid;type:varchar(36);unique;not null"`
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt int64     `gorm:"column:updated_at;type:bigint;autoUpdateTime"`
-
-	// Addon int `gorm:"column:addon;type:int;default:0"`
+	// Addon  int `gorm:"column:addon;type:int;default:0"`
 	// Addon2 int `gorm:"column:addon2;type:int;default:0"`
 	// Addon3 int `gorm:"column:addon3;type:int;default:0"`
 

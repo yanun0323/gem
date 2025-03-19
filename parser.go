@@ -64,36 +64,51 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 
 	tableName = getTableName(model)
 
-	columns = make([]string, 0)
+	// 創建一個新的結構來存儲欄位定義，包括位置資訊
+	type fieldInfo struct {
+		name     string
+		def      string
+		position int
+	}
+
+	fieldInfos := []fieldInfo{}
 	indexes = make(map[string]*indexInfo)
 
-	// Iterate through all fields
-	// Ignore unexported fields
-	// Handle embedded fields
-	// Handle indexes
-	// If there's only an index tag without value, create a single-column index
-	// If there's a specified index name, it might be part of a composite index
-	// Handle unique indexes
-	// If there's only a uniqueIndex tag without value, create a single-column unique index
-	// If there's a specified index name, it might be part of a composite index
+	// 收集所有有效欄位的資訊
+	validFieldCount := 0
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 
-		// Ignore unexported fields
+		// 忽略未導出欄位
 		if !field.IsExported() {
 			continue
 		}
 
-		// Handle embedded fields
+		// 處理嵌入欄位
 		if field.Anonymous || hasTag(field, "embedded") {
 			embeddedPrefix := getTagValue(field, "embeddedPrefix")
-			columns = append(columns, parseEmbeddedField(field.Type, embeddedPrefix)...)
+			// 這裡需要修改以支持嵌入欄位的位置追蹤
+			embeddedColumns := parseEmbeddedField(field.Type, embeddedPrefix)
+			for _, col := range embeddedColumns {
+				fieldInfos = append(fieldInfos, fieldInfo{
+					name:     "", // 需要從col提取名稱
+					def:      col,
+					position: validFieldCount,
+				})
+				validFieldCount++
+			}
 			continue
 		}
 
 		column := parseField(field)
 		if column != "" {
-			columns = append(columns, column)
+			columnName := getColumnName(field)
+			fieldInfos = append(fieldInfos, fieldInfo{
+				name:     columnName,
+				def:      column,
+				position: validFieldCount,
+			})
+			validFieldCount++
 		}
 
 		// Handle indexes
@@ -175,6 +190,15 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 				}
 			}
 		}
+	}
+
+	// 將欄位資訊按照位置排序並轉換為欄位定義列表
+	sort.Slice(fieldInfos, func(i, j int) bool {
+		return fieldInfos[i].position < fieldInfos[j].position
+	})
+
+	for _, info := range fieldInfos {
+		columns = append(columns, info.def)
 	}
 
 	return

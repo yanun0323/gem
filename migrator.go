@@ -246,6 +246,7 @@ type columnDef struct {
 	Name        string
 	Type        string
 	Constraints []string
+	Position    int
 }
 
 type tableDef struct {
@@ -508,6 +509,7 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	var columns []columnDef
 	var currentColumn string
 	var inParentheses int
+	position := 0 // 增加位置計數器
 
 	// Split by lines and process each line
 	lines := strings.Split(columnsStr, "\n")
@@ -557,8 +559,10 @@ func parseCreateTable(sql string) (*tableDef, error) {
 				Name:        columnName,
 				Type:        parts[1],
 				Constraints: parts[2:],
+				Position:    position, // 設置欄位位置
 			}
 			columns = append(columns, col)
+			position++ // 增加位置計數
 			currentColumn = ""
 		}
 	}
@@ -651,41 +655,153 @@ func (m *migrator) compareColumns(tableName string, oldCols, newCols []columnDef
 		newColMap[col.Name] = col
 	}
 
-	// Check added and modified columns
+	// Sort new columns by position
+	sortedNewCols := make([]columnDef, len(newCols))
+	copy(sortedNewCols, newCols)
+	sort.Slice(sortedNewCols, func(i, j int) bool {
+		return sortedNewCols[i].Position < sortedNewCols[j].Position
+	})
+
+	// Build column name to position mapping
+	colPositionMap := make(map[string]int)
+	for i, col := range sortedNewCols {
+		colPositionMap[col.Name] = i
+	}
+
+	// 跟蹤當前操作中已添加的新欄位
+	addedCols := make(map[string]bool)
+
+	// 首先收集所有要增加的欄位及其位置信息
+	addedColumns := []struct {
+		col      columnDef
+		position int
+	}{}
+
 	for name, newCol := range newColMap {
-		oldCol, exists := oldColMap[name]
-		if !exists {
-			// New columns
-			operations = append(operations, alterOperation{
-				Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
-					tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
-				Down: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-					tableName, newCol.Name),
+		if _, exists := oldColMap[name]; !exists {
+			position := colPositionMap[name]
+			addedColumns = append(addedColumns, struct {
+				col      columnDef
+				position int
+			}{
+				col:      newCol,
+				position: position,
 			})
-		} else {
-			// Compare if column definition has changes
-			if !compareColumnDef(oldCol, newCol) {
-				operations = append(operations, alterOperation{
-					Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-						tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
-					Down: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-						tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
-				})
-			}
 		}
 	}
 
-	// Check deleted columns
+	// 按位置排序要添加的欄位
+	sort.Slice(addedColumns, func(i, j int) bool {
+		return addedColumns[i].position < addedColumns[j].position
+	})
+
+	// 處理添加欄位
+	for _, item := range addedColumns {
+		newCol := item.col
+		position := item.position
+
+		// 尋找前一個欄位 - 可能是原有欄位或剛剛添加的欄位
+		positionClause := "FIRST"
+		for i := position - 1; i >= 0; i-- {
+			if i < len(sortedNewCols) {
+				prevCol := sortedNewCols[i]
+				// 檢查前一個欄位是原有的或已在此操作中添加的
+				if _, prevExistsInOld := oldColMap[prevCol.Name]; prevExistsInOld || addedCols[prevCol.Name] {
+					positionClause = fmt.Sprintf("AFTER `%s`", prevCol.Name)
+					break
+				}
+			}
+		}
+
+		operations = append(operations, alterOperation{
+			Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s %s;",
+				tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " "), positionClause),
+			Down: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
+				tableName, newCol.Name),
+		})
+
+		// 記錄此欄位已添加
+		addedCols[newCol.Name] = true
+	}
+
+	// 處理修改欄位
+	for name, newCol := range newColMap {
+		oldCol, exists := oldColMap[name]
+		if exists && !compareColumnDef(oldCol, newCol) {
+			operations = append(operations, alterOperation{
+				Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
+					tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
+				Down: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
+					tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+			})
+		}
+	}
+
+	// 處理刪除欄位
 	if !m.conf.KeepDroppedColumn {
+		sortedOldCols := make([]columnDef, len(oldCols))
+		copy(sortedOldCols, oldCols)
+		sort.Slice(sortedOldCols, func(i, j int) bool {
+			return sortedOldCols[i].Position < sortedOldCols[j].Position
+		})
+
+		oldColPositionMap := make(map[string]int)
+		for i, col := range sortedOldCols {
+			oldColPositionMap[col.Name] = i
+		}
+
+		// 跟蹤當前操作中已添加的新欄位(用於DOWN操作)
+		addedColsInDown := make(map[string]bool)
+
+		// 首先收集所有要恢復的欄位及其位置信息
+		deletedColumns := []struct {
+			col      columnDef
+			position int
+		}{}
+
 		for name, oldCol := range oldColMap {
 			if _, exists := newColMap[name]; !exists {
-				operations = append(operations, alterOperation{
-					Up: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-						tableName, oldCol.Name),
-					Down: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s;",
-						tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+				position := oldColPositionMap[name]
+				deletedColumns = append(deletedColumns, struct {
+					col      columnDef
+					position int
+				}{
+					col:      oldCol,
+					position: position,
 				})
 			}
+		}
+
+		// 按位置排序要恢復的欄位
+		sort.Slice(deletedColumns, func(i, j int) bool {
+			return deletedColumns[i].position < deletedColumns[j].position
+		})
+
+		// 為每個刪除的欄位生成操作
+		for _, item := range deletedColumns {
+			oldCol := item.col
+			position := item.position
+
+			// 生成 DOWN 語句，根據位置添加 AFTER 子句
+			positionClause := "FIRST"
+			for i := position - 1; i >= 0; i-- {
+				prevColName := sortedOldCols[i].Name
+				// 檢查前一個欄位是否存在於新表或已在此 DOWN 操作中添加
+				if _, prevExistsInNew := newColMap[prevColName]; prevExistsInNew || addedColsInDown[prevColName] {
+					positionClause = fmt.Sprintf("AFTER `%s`", prevColName)
+					break
+				}
+			}
+
+			operations = append(operations, alterOperation{
+				Up: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
+					tableName, oldCol.Name),
+				Down: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s %s;",
+					tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " "), positionClause),
+			})
+
+			// 記錄此欄位已在 DOWN 操作中添加
+			addedColsInDown[oldCol.Name] = true
 		}
 	}
 
