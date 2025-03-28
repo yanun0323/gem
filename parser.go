@@ -13,10 +13,12 @@ type nameable interface {
 }
 
 type indexInfo struct {
+	Quote      *quote
 	Name       string
 	Columns    []string
 	IsUnique   bool
 	Priorities map[string]int
+	TableName  string
 }
 
 func getTableName(model interface{}) string {
@@ -55,7 +57,7 @@ func toPlural(s string) string {
 
 // parseModel parses GORM model struct
 // Get the reflection type of the struct
-func parseModel(model interface{}) (tableName string, columns []string, indexes map[string]*indexInfo) {
+func parseModel(model interface{}, quote *quote) (tableName string, columns []string, indexes map[string]*indexInfo) {
 	// Get the reflection type of the struct
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -88,7 +90,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		if field.Anonymous || hasTag(field, "embedded") {
 			embeddedPrefix := getTagValue(field, "embeddedPrefix")
 			// 這裡需要修改以支持嵌入欄位的位置追蹤
-			embeddedColumns := parseEmbeddedField(field.Type, embeddedPrefix)
+			embeddedColumns := parseEmbeddedField(field.Type, embeddedPrefix, quote)
 			for _, col := range embeddedColumns {
 				fieldInfos = append(fieldInfos, fieldInfo{
 					name:     "", // 需要從col提取名稱
@@ -100,7 +102,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 			continue
 		}
 
-		column := parseField(field)
+		column := parseField(field, quote)
 		if column != "" {
 			columnName := getColumnName(field)
 			fieldInfos = append(fieldInfos, fieldInfo{
@@ -130,10 +132,12 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 				// If there's only index tag without value, create a single-column index
 				indexName = fmt.Sprintf("idx_%s", columnName)
 				indexes[indexName] = &indexInfo{
+					Quote:      quote,
 					Name:       indexName,
 					Columns:    []string{columnName},
 					IsUnique:   false,
 					Priorities: map[string]int{columnName: priority},
+					TableName:  tableName,
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
@@ -142,10 +146,12 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 					idx.Priorities[columnName] = priority
 				} else {
 					indexes[indexName] = &indexInfo{
+						Quote:      quote,
 						Name:       indexName,
 						Columns:    []string{columnName},
 						IsUnique:   false,
 						Priorities: map[string]int{columnName: priority},
+						TableName:  tableName,
 					}
 				}
 			}
@@ -170,10 +176,12 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 				// If there's only uniqueIndex tag without value, create a single-column unique index
 				indexName = fmt.Sprintf("udx_%s", columnName)
 				indexes[indexName] = &indexInfo{
+					Quote:      quote,
 					Name:       indexName,
 					Columns:    []string{columnName},
 					IsUnique:   true,
 					Priorities: map[string]int{columnName: priority},
+					TableName:  tableName,
 				}
 			} else {
 				// If there's a specified index name, it might be part of a composite index
@@ -182,10 +190,12 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 					idx.Priorities[columnName] = priority
 				} else {
 					indexes[indexName] = &indexInfo{
+						Quote:      quote,
 						Name:       indexName,
 						Columns:    []string{columnName},
 						IsUnique:   true,
 						Priorities: map[string]int{columnName: priority},
+						TableName:  tableName,
 					}
 				}
 			}
@@ -209,8 +219,8 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 // If there's a primary key, add PRIMARY KEY constraint
 // Generate CREATE TABLE statement
 // Generate index statements
-func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
-	tableName, columns, indexes := parseModel(model)
+func parseModelToSQLWithIndexes(model interface{}, quote *quote) (string, []string, error) {
+	tableName, columns, indexes := parseModel(model, quote)
 
 	// Check if there's a primary key field
 	primaryKeyName := ""
@@ -227,57 +237,19 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 		}
 	}
 
-	// if len(primaryKeyName) == 0 {
-	// 	return "", nil, fmt.Errorf("require primary key in table (%s)", tableName)
-	// }
-
-	// If there's a primary key, add PRIMARY KEY constraint
 	if len(primaryKeyName) != 0 {
-		columns = append(columns, fmt.Sprintf("PRIMARY KEY (`%s`)", primaryKeyName))
+		columns = append(columns, fmt.Sprintf("PRIMARY KEY (%s)", quote.Wrap(primaryKeyName)))
 	}
 
 	// Generate CREATE TABLE statement
-	createTable := fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s` (\n  %s\n);",
-		tableName,
+	createTable := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n);",
+		quote.Wrap(tableName),
 		strings.Join(columns, ",\n  "))
 
 	// Generate index statements
 	var indexStatements []string
 	for _, idx := range indexes {
-		// 根據優先級排序列名
-		type columnPriority struct {
-			name     string
-			priority int
-		}
-
-		sortedColumns := make([]columnPriority, 0, len(idx.Columns))
-		for _, col := range idx.Columns {
-			priority := idx.Priorities[col]
-			sortedColumns = append(sortedColumns, columnPriority{col, priority})
-		}
-
-		// 如果有優先級，按優先級排序；否則保持原順序
-		if len(idx.Priorities) > 0 {
-			sort.SliceStable(sortedColumns, func(i, j int) bool {
-				return sortedColumns[i].priority < sortedColumns[j].priority
-			})
-		}
-
-		// 提取排序後的列名
-		orderedColumns := make([]string, len(sortedColumns))
-		for i, col := range sortedColumns {
-			orderedColumns[i] = col.name
-		}
-
-		if idx.IsUnique {
-			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE UNIQUE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
-		} else {
-			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
-		}
+		indexStatements = append(indexStatements, idx.ToSQL())
 	}
 
 	sort.Strings(indexStatements)
@@ -293,7 +265,7 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 // Handle default value
 // Handle comment, use single quotes, no need for extra escaping
 // Remove leading and trailing quotes (if any)
-func parseField(field reflect.StructField) string {
+func parseField(field reflect.StructField, quote *quote) string {
 	// If marked as "-", ignore this field
 	if ignore := getTagValue(field, "-"); ignore == "all" || ignore == "migration" {
 		return ""
@@ -336,16 +308,16 @@ func parseField(field reflect.StructField) string {
 	}
 
 	if len(constraints) > 0 {
-		return fmt.Sprintf("`%s` %s %s", columnName, sqlType, strings.Join(constraints, " "))
+		return fmt.Sprintf("%s %s %s", quote.Wrap(columnName), sqlType, strings.Join(constraints, " "))
 	}
-	return fmt.Sprintf("`%s` %s", columnName, sqlType)
+	return fmt.Sprintf("%s %s", quote.Wrap(columnName), sqlType)
 }
 
 // parseEmbeddedField parses embedded fields
 // Add prefix to column name and ensure correct backtick placement
 // Remove original backticks
 // Add prefix and re-add backticks
-func parseEmbeddedField(t reflect.Type, prefix string) []string {
+func parseEmbeddedField(t reflect.Type, prefix string, quote *quote) []string {
 	var columns []string
 
 	for i := 0; i < t.NumField(); i++ {
@@ -354,15 +326,15 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 			continue
 		}
 
-		column := parseField(field)
+		column := parseField(field, quote)
 		if column != "" {
 			if prefix != "" {
 				// Add prefix to column name and ensure correct backtick placement
 				parts := strings.SplitN(column, " ", 2)
 				// Remove original backticks
-				columnName := strings.Trim(parts[0], "`")
+				columnName := quote.Unwrap(parts[0])
 				// Add prefix and re-add backticks
-				column = fmt.Sprintf("`%s%s` %s", prefix, columnName, parts[1])
+				column = fmt.Sprintf("%s %s", quote.Wrap(prefix+columnName), parts[1])
 			}
 			columns = append(columns, column)
 		}
@@ -513,4 +485,46 @@ func getColumnName(field reflect.StructField) string {
 		return columnName
 	}
 	return toSnakeCase(field.Name)
+}
+
+func (idx *indexInfo) ToSQL() string {
+	// Ensure no duplicate columns
+	idx.Columns = removeDuplicates(idx.Columns)
+
+	// Sort columns by priority if priorities are set
+	if len(idx.Priorities) > 0 {
+		type columnPriority struct {
+			name     string
+			priority int
+		}
+
+		sortedColumns := make([]columnPriority, 0, len(idx.Columns))
+		for _, col := range idx.Columns {
+			priority := idx.Priorities[col]
+			sortedColumns = append(sortedColumns, columnPriority{col, priority})
+		}
+
+		sort.SliceStable(sortedColumns, func(i, j int) bool {
+			return sortedColumns[i].priority < sortedColumns[j].priority
+		})
+
+		// Update columns array with sorted columns
+		for i, col := range sortedColumns {
+			idx.Columns[i] = col.name
+		}
+	}
+
+	// Quote each column name
+	quotedColumns := make([]string, len(idx.Columns))
+	for i, col := range idx.Columns {
+		quotedColumns[i] = idx.Quote.Wrap(col)
+	}
+
+	if idx.IsUnique {
+		return fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s);",
+			idx.Name, idx.Quote.Wrap(idx.TableName), strings.Join(quotedColumns, ", "))
+	}
+
+	return fmt.Sprintf("CREATE INDEX %s ON %s (%s);",
+		idx.Name, idx.Quote.Wrap(idx.TableName), strings.Join(quotedColumns, ", "))
 }
