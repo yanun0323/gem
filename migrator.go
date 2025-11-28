@@ -15,6 +15,21 @@ import (
 	"time"
 )
 
+// Dialect specifies the SQL dialect used for generated statements.
+// Currently supports SQLite, MySQL, and PostgreSQL.
+type Dialect int
+
+const (
+	// DialectUnknown means no driver configured; defaults to MySQL for backward compatibility.
+	DialectUnknown Dialect = iota
+	// DialectSQLite emits DialectSQLite dialect SQL.
+	DialectSQLite
+	// DialectMySQL emits DialectMySQL dialect SQL.
+	DialectMySQL
+	// DialectPostgreSQL emits DialectPostgreSQL dialect SQL.
+	DialectPostgreSQL
+)
+
 // MigrationTool represents the type of migration tool to be used for database schema migrations.
 type MigrationTool int
 
@@ -31,6 +46,9 @@ const (
 
 // Config defines the configuration options for the database schema migration generator.
 type Config struct {
+	// Dialect sets the SQL dialect for generated statements; default is MySQL.
+	Dialect Dialect
+
 	// Tool specifies which migration tool format to use for generating migration files.
 	// Available options are:
 	// - RawSQL: Plain SQL files
@@ -77,9 +95,38 @@ type migrator struct {
 	snapshots []*modelSnapshot
 }
 
+func (m *migrator) driver() Dialect {
+	if m.conf == nil {
+		return DialectMySQL
+	}
+
+	if m.conf.Dialect == DialectUnknown {
+		return DialectMySQL
+	}
+
+	return m.conf.Dialect
+}
+
+func (m *migrator) quoteIdentifier(name string) string {
+	switch m.driver() {
+	case DialectPostgreSQL:
+		return fmt.Sprintf("\"%s\"", name)
+	default:
+		return fmt.Sprintf("`%s`", name)
+	}
+}
+
 // New creates a new migrator instance with the given configuration.
 // If config is nil, default configuration values will be used.
 func New(config *Config) *migrator {
+	if config == nil {
+		config = &Config{}
+	}
+
+	if config.Dialect == DialectUnknown {
+		config.Dialect = DialectMySQL
+	}
+
 	return &migrator{
 		conf:      config,
 		models:    make([]interface{}, 0),
@@ -152,7 +199,7 @@ func (m *migrator) Generate() error {
 	for _, model := range m.models {
 		timestamp++
 
-		schema, indexes, err := parseModelToSQLWithIndexes(model)
+		schema, indexes, err := parseModelToSQLWithIndexes(model, m.driver())
 		if err != nil {
 			return fmt.Errorf("parse model, err: %w", err)
 		}
@@ -268,17 +315,40 @@ type indexDef struct {
 	TableName string
 }
 
-func (idx *indexDef) ToSQL() string {
+func quoteIdentifier(name string, driver Dialect) string {
+	switch driver {
+	case DialectPostgreSQL:
+		return fmt.Sprintf("\"%s\"", strings.Trim(name, "`\""))
+	default:
+		return fmt.Sprintf("`%s`", strings.Trim(name, "`\""))
+	}
+}
+
+func (idx *indexDef) ToSQL(driver Dialect) string {
 	// Ensure no duplicate columns
 	idx.Columns = removeDuplicates(idx.Columns)
 
+	quote := func(name string) string {
+		switch driver {
+		case DialectPostgreSQL:
+			return fmt.Sprintf("\"%s\"", name)
+		default:
+			return fmt.Sprintf("`%s`", name)
+		}
+	}
+
+	quotedColumns := make([]string, len(idx.Columns))
+	for i, col := range idx.Columns {
+		quotedColumns[i] = quote(strings.Trim(col, "`\""))
+	}
+
 	if idx.IsUnique {
 		return fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s);",
-			idx.Name, idx.TableName, strings.Join(idx.Columns, ", "))
+			quote(idx.Name), quote(idx.TableName), strings.Join(quotedColumns, ", "))
 	}
 
 	return fmt.Sprintf("CREATE INDEX %s ON %s (%s);",
-		idx.Name, idx.TableName, strings.Join(idx.Columns, ", "))
+		quote(idx.Name), quote(idx.TableName), strings.Join(quotedColumns, ", "))
 }
 
 func (m *migrator) snapshotsDir() string {
@@ -450,7 +520,7 @@ func (m *migrator) generateAlterStatements(tableName string, newSchema string, n
 	}
 
 	// Compare index differences
-	indexOps := compareIndexes(snapshot.Indexes, newIndexes)
+	indexOps := compareIndexes(snapshot.Indexes, newIndexes, m.driver())
 	for _, op := range indexOps {
 		if op.Up != "" {
 			upStatements = append(upStatements, op.Up)
@@ -495,8 +565,8 @@ func parseCreateTable(sql string) (*tableDef, error) {
 	// Remove extra whitespace and newlines
 	sql = strings.TrimSpace(sql)
 
-	// Parse table name
-	tableNameRegex := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS ` + "`" + `(\w+)` + "`" + ` \(([\s\S]+)\);`)
+	// Parse table name (support backtick or double quote identifiers)
+	tableNameRegex := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS [` + "`\\\"" + `](\w+)[` + "`\\\"" + `] \(([\s\S]+)\);`)
 	matches := tableNameRegex.FindStringSubmatch(sql)
 	if len(matches) != 3 {
 		return nil, fmt.Errorf("invalid CREATE TABLE syntax")
@@ -546,8 +616,8 @@ func parseCreateTable(sql string) (*tableDef, error) {
 				continue
 			}
 
-			// Remove backticks from column name
-			columnName := strings.Trim(parts[0], "`")
+			// Remove quotes/backticks from column name
+			columnName := strings.Trim(parts[0], "`\"")
 
 			// Special handling for PRIMARY KEY definition
 			if strings.ToUpper(parts[0]) == "PRIMARY" && strings.ToUpper(parts[1]) == "KEY" {
@@ -596,7 +666,7 @@ func parseIndexes(indexes []string) map[string]*indexDef {
 		columnsStr := idx[strings.Index(idx, "(")+1 : strings.LastIndex(idx, ")")]
 		columns := strings.Split(columnsStr, ",")
 		for i := range columns {
-			columns[i] = strings.TrimSpace(columns[i])
+			columns[i] = strings.Trim(strings.TrimSpace(columns[i]), "`\"")
 		}
 
 		// Remove possible extra semicolons
@@ -707,17 +777,21 @@ func (m *migrator) compareColumns(tableName string, oldCols, newCols []columnDef
 				prevCol := sortedNewCols[i]
 				// 檢查前一個欄位是原有的或已在此操作中添加的
 				if _, prevExistsInOld := oldColMap[prevCol.Name]; prevExistsInOld || addedCols[prevCol.Name] {
-					positionClause = fmt.Sprintf("AFTER `%s`", prevCol.Name)
+					positionClause = fmt.Sprintf("AFTER %s", m.quoteIdentifier(prevCol.Name))
 					break
 				}
 			}
 		}
 
+		if m.driver() != DialectMySQL {
+			positionClause = ""
+		}
+
 		operations = append(operations, alterOperation{
-			Up: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s %s;",
-				tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " "), positionClause),
-			Down: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-				tableName, newCol.Name),
+			Up: fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s %s %s;",
+				m.quoteIdentifier(tableName), m.quoteIdentifier(newCol.Name), newCol.Type, strings.Join(newCol.Constraints, " "), positionClause),
+			Down: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;",
+				m.quoteIdentifier(tableName), m.quoteIdentifier(newCol.Name)),
 		})
 
 		// 記錄此欄位已添加
@@ -729,10 +803,10 @@ func (m *migrator) compareColumns(tableName string, oldCols, newCols []columnDef
 		oldCol, exists := oldColMap[name]
 		if exists && !compareColumnDef(oldCol, newCol) {
 			operations = append(operations, alterOperation{
-				Up: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-					tableName, newCol.Name, newCol.Type, strings.Join(newCol.Constraints, " ")),
-				Down: fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s;",
-					tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " ")),
+				Up: fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s %s;",
+					m.quoteIdentifier(tableName), m.quoteIdentifier(newCol.Name), newCol.Type, strings.Join(newCol.Constraints, " ")),
+				Down: fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s %s;",
+					m.quoteIdentifier(tableName), m.quoteIdentifier(oldCol.Name), oldCol.Type, strings.Join(oldCol.Constraints, " ")),
 			})
 		}
 	}
@@ -788,16 +862,20 @@ func (m *migrator) compareColumns(tableName string, oldCols, newCols []columnDef
 				prevColName := sortedOldCols[i].Name
 				// 檢查前一個欄位是否存在於新表或已在此 DOWN 操作中添加
 				if _, prevExistsInNew := newColMap[prevColName]; prevExistsInNew || addedColsInDown[prevColName] {
-					positionClause = fmt.Sprintf("AFTER `%s`", prevColName)
+					positionClause = fmt.Sprintf("AFTER %s", m.quoteIdentifier(prevColName))
 					break
 				}
 			}
 
+			if m.driver() != DialectMySQL {
+				positionClause = ""
+			}
+
 			operations = append(operations, alterOperation{
-				Up: fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`;",
-					tableName, oldCol.Name),
-				Down: fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s %s %s;",
-					tableName, oldCol.Name, oldCol.Type, strings.Join(oldCol.Constraints, " "), positionClause),
+				Up: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;",
+					m.quoteIdentifier(tableName), m.quoteIdentifier(oldCol.Name)),
+				Down: fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s %s %s;",
+					m.quoteIdentifier(tableName), m.quoteIdentifier(oldCol.Name), oldCol.Type, strings.Join(oldCol.Constraints, " "), positionClause),
 			})
 
 			// 記錄此欄位已在 DOWN 操作中添加
@@ -825,10 +903,19 @@ func compareColumnDef(old, new columnDef) bool {
 }
 
 // compareIndexes compares index differences
-func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
+func compareIndexes(oldIndexes, newIndexes []string, driver Dialect) []alterOperation {
 	var operations []alterOperation
 	oldIndexMap := parseIndexes(oldIndexes)
 	newIndexMap := parseIndexes(newIndexes)
+
+	dropIndexSQL := func(name, table string) string {
+		switch driver {
+		case DialectMySQL:
+			return fmt.Sprintf("DROP INDEX %s ON %s;", quoteIdentifier(name, driver), quoteIdentifier(table, driver))
+		default:
+			return fmt.Sprintf("DROP INDEX %s;", quoteIdentifier(name, driver))
+		}
+	}
 
 	// Check added and modified indexes
 	for name, newIdx := range newIndexMap {
@@ -836,17 +923,15 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 		if !exists {
 			// New indexes
 			operations = append(operations, alterOperation{
-				Up:   newIdx.ToSQL(),
-				Down: fmt.Sprintf("DROP INDEX %s ON %s;", name, newIdx.TableName),
+				Up:   newIdx.ToSQL(driver),
+				Down: dropIndexSQL(name, newIdx.TableName),
 			})
 		} else {
 			// Compare if index definition has changes
 			if !compareIndexDef(oldIdx, newIdx) {
 				operations = append(operations, alterOperation{
-					Up: fmt.Sprintf("DROP INDEX %s ON %s;\n%s",
-						name, newIdx.TableName, newIdx.ToSQL()),
-					Down: fmt.Sprintf("DROP INDEX %s ON %s;\n%s",
-						name, oldIdx.TableName, oldIdx.ToSQL()),
+					Up:   fmt.Sprintf("%s\n%s", dropIndexSQL(name, newIdx.TableName), newIdx.ToSQL(driver)),
+					Down: fmt.Sprintf("%s\n%s", dropIndexSQL(name, oldIdx.TableName), oldIdx.ToSQL(driver)),
 				})
 			}
 		}
@@ -856,8 +941,8 @@ func compareIndexes(oldIndexes, newIndexes []string) []alterOperation {
 	for name, oldIdx := range oldIndexMap {
 		if _, exists := newIndexMap[name]; !exists {
 			operations = append(operations, alterOperation{
-				Up:   fmt.Sprintf("DROP INDEX %s ON %s;", name, oldIdx.TableName),
-				Down: oldIdx.ToSQL(),
+				Up:   dropIndexSQL(name, oldIdx.TableName),
+				Down: oldIdx.ToSQL(driver),
 			})
 		}
 	}

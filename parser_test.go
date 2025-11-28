@@ -78,7 +78,7 @@ func TestParseModel(t *testing.T) {
 }
 
 func TestParseModelToSQLWithIndexes(t *testing.T) {
-	createTable, indexes, err := parseModelToSQLWithIndexes(User{})
+	createTable, indexes, err := parseModelToSQLWithIndexes(User{}, DialectMySQL)
 	if err != nil {
 		t.Fatalf("Failed to parse model: %v", err)
 	}
@@ -105,8 +105,8 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 	}
 
 	expectedIndex := []string{
-		"CREATE INDEX idx_name ON `users` (`name`);",
-		"CREATE UNIQUE INDEX udx_email_address ON `users` (`email_address`);",
+		"CREATE INDEX `idx_name` ON `users` (`name`);",
+		"CREATE UNIQUE INDEX `udx_email_address` ON `users` (`email_address`);",
 	}
 
 	// Validate index count
@@ -120,6 +120,66 @@ func TestParseModelToSQLWithIndexes(t *testing.T) {
 		}
 	}
 
+}
+
+func TestParseModelToSQLWithIndexes_PostgreSQL(t *testing.T) {
+	createTable, indexes, err := parseModelToSQLWithIndexes(User{}, DialectPostgreSQL)
+	if err != nil {
+		t.Fatalf("Failed to parse model: %v", err)
+	}
+
+	if !strings.Contains(createTable, "CREATE TABLE IF NOT EXISTS \"users\"") {
+		t.Fatalf("invalid CREATE TABLE for PostgreSQL: %s", createTable)
+	}
+
+	if !strings.Contains(createTable, "\"id\" SERIAL NOT NULL") {
+		t.Fatalf("id column not using SERIAL: %s", createTable)
+	}
+
+	expectedIndexes := []string{
+		"CREATE INDEX \"idx_name\" ON \"users\" (\"name\");",
+		"CREATE UNIQUE INDEX \"udx_email_address\" ON \"users\" (\"email_address\");",
+	}
+
+	if len(indexes) != len(expectedIndexes) {
+		t.Fatalf("Incorrect index count, expected %d, got %d", len(expectedIndexes), len(indexes))
+	}
+
+	for i, idx := range indexes {
+		if indexes[i] != expectedIndexes[i] {
+			t.Fatalf("Index Mismatch\nexpected: %s\ngot: %s", expectedIndexes[i], idx)
+		}
+	}
+}
+
+func TestParseModelToSQLWithIndexes_SQLite(t *testing.T) {
+	createTable, indexes, err := parseModelToSQLWithIndexes(User{}, DialectSQLite)
+	if err != nil {
+		t.Fatalf("Failed to parse model: %v", err)
+	}
+
+	if !strings.Contains(createTable, "CREATE TABLE IF NOT EXISTS `users`") {
+		t.Fatalf("invalid CREATE TABLE for SQLite: %s", createTable)
+	}
+
+	if !strings.Contains(createTable, "`id` INTEGER AUTOINCREMENT NOT NULL") {
+		t.Fatalf("id column not using AUTOINCREMENT: %s", createTable)
+	}
+
+	expectedIndexes := []string{
+		"CREATE INDEX `idx_name` ON `users` (`name`);",
+		"CREATE UNIQUE INDEX `udx_email_address` ON `users` (`email_address`);",
+	}
+
+	if len(indexes) != len(expectedIndexes) {
+		t.Fatalf("Incorrect index count, expected %d, got %d", len(expectedIndexes), len(indexes))
+	}
+
+	for i, idx := range indexes {
+		if indexes[i] != expectedIndexes[i] {
+			t.Fatalf("Index Mismatch\nexpected: %s\ngot: %s", expectedIndexes[i], idx)
+		}
+	}
 }
 
 func TestGetSQLType(t *testing.T) {
@@ -162,7 +222,7 @@ func TestGetSQLType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getSQLType(tt.field)
+			got := getSQLType(tt.field, DialectMySQL)
 			if got != tt.expected {
 				t.Fatalf("getSQLType() = %v, want %v", got, tt.expected)
 			}

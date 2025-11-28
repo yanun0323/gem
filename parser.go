@@ -19,6 +19,15 @@ type indexInfo struct {
 	Priorities map[string]int
 }
 
+func quoteIdent(name string, driver Dialect) string {
+	switch driver {
+	case DialectPostgreSQL:
+		return fmt.Sprintf("\"%s\"", name)
+	default:
+		return fmt.Sprintf("`%s`", name)
+	}
+}
+
 func getTableName(model interface{}) string {
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -53,9 +62,15 @@ func toPlural(s string) string {
 	return s + "s"
 }
 
-// parseModel parses GORM model struct
+// parseModel parses GORM model struct using MySQL dialect (backward compatible wrapper).
 // Get the reflection type of the struct
 func parseModel(model interface{}) (tableName string, columns []string, indexes map[string]*indexInfo) {
+	return parseModelWithDriver(model, DialectMySQL)
+}
+
+// parseModelWithDriver parses GORM model struct with the given SQL dialect.
+// Get the reflection type of the struct
+func parseModelWithDriver(model interface{}, driver Dialect) (tableName string, columns []string, indexes map[string]*indexInfo) {
 	// Get the reflection type of the struct
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -88,7 +103,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 		if field.Anonymous || hasTag(field, "embedded") {
 			embeddedPrefix := getTagValue(field, "embeddedPrefix")
 			// 這裡需要修改以支持嵌入欄位的位置追蹤
-			embeddedColumns := parseEmbeddedField(field.Type, embeddedPrefix)
+			embeddedColumns := parseEmbeddedField(field.Type, embeddedPrefix, driver)
 			for _, col := range embeddedColumns {
 				fieldInfos = append(fieldInfos, fieldInfo{
 					name:     "", // 需要從col提取名稱
@@ -100,7 +115,7 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 			continue
 		}
 
-		column := parseField(field)
+		column := parseField(field, driver)
 		if column != "" {
 			columnName := getColumnName(field)
 			fieldInfos = append(fieldInfos, fieldInfo{
@@ -209,8 +224,8 @@ func parseModel(model interface{}) (tableName string, columns []string, indexes 
 // If there's a primary key, add PRIMARY KEY constraint
 // Generate CREATE TABLE statement
 // Generate index statements
-func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
-	tableName, columns, indexes := parseModel(model)
+func parseModelToSQLWithIndexes(model interface{}, driver Dialect) (string, []string, error) {
+	tableName, columns, indexes := parseModelWithDriver(model, driver)
 
 	// Check if there's a primary key field
 	primaryKeyName := ""
@@ -233,12 +248,12 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 
 	// If there's a primary key, add PRIMARY KEY constraint
 	if len(primaryKeyName) != 0 {
-		columns = append(columns, fmt.Sprintf("PRIMARY KEY (`%s`)", primaryKeyName))
+		columns = append(columns, fmt.Sprintf("PRIMARY KEY (%s)", quoteIdent(primaryKeyName, driver)))
 	}
 
 	// Generate CREATE TABLE statement
-	createTable := fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s` (\n  %s\n);",
-		tableName,
+	createTable := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n);",
+		quoteIdent(tableName, driver),
 		strings.Join(columns, ",\n  "))
 
 	// Generate index statements
@@ -269,14 +284,19 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 			orderedColumns[i] = col.name
 		}
 
+		quotedColumns := make([]string, len(orderedColumns))
+		for i, c := range orderedColumns {
+			quotedColumns[i] = quoteIdent(c, driver)
+		}
+
 		if idx.IsUnique {
 			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE UNIQUE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
+				fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s);",
+					quoteIdent(idx.Name, driver), quoteIdent(tableName, driver), strings.Join(quotedColumns, ", ")))
 		} else {
 			indexStatements = append(indexStatements,
-				fmt.Sprintf("CREATE INDEX %s ON `%s` (`%s`);",
-					idx.Name, tableName, strings.Join(orderedColumns, "`, `")))
+				fmt.Sprintf("CREATE INDEX %s ON %s (%s);",
+					quoteIdent(idx.Name, driver), quoteIdent(tableName, driver), strings.Join(quotedColumns, ", ")))
 		}
 	}
 
@@ -293,20 +313,27 @@ func parseModelToSQLWithIndexes(model interface{}) (string, []string, error) {
 // Handle default value
 // Handle comment, use single quotes, no need for extra escaping
 // Remove leading and trailing quotes (if any)
-func parseField(field reflect.StructField) string {
+func parseField(field reflect.StructField, driver Dialect) string {
 	// If marked as "-", ignore this field
 	if ignore := getTagValue(field, "-"); ignore == "all" || ignore == "migration" {
 		return ""
 	}
 
 	columnName := getColumnName(field)
-	sqlType := getSQLType(field)
+	sqlType := getSQLType(field, driver)
 
 	var constraints []string
 
 	// Add constraints in fixed order
 	if hasTag(field, "autoIncrement") {
-		constraints = append(constraints, "AUTO_INCREMENT")
+		switch driver {
+		case DialectPostgreSQL:
+			// Serial/BigSerial handled at type level; no AUTO_INCREMENT keyword.
+		case DialectSQLite:
+			constraints = append(constraints, "AUTOINCREMENT")
+		default:
+			constraints = append(constraints, "AUTO_INCREMENT")
+		}
 	}
 
 	// Handle check constraint
@@ -336,16 +363,16 @@ func parseField(field reflect.StructField) string {
 	}
 
 	if len(constraints) > 0 {
-		return fmt.Sprintf("`%s` %s %s", columnName, sqlType, strings.Join(constraints, " "))
+		return fmt.Sprintf("%s %s %s", quoteIdent(columnName, driver), sqlType, strings.Join(constraints, " "))
 	}
-	return fmt.Sprintf("`%s` %s", columnName, sqlType)
+	return fmt.Sprintf("%s %s", quoteIdent(columnName, driver), sqlType)
 }
 
 // parseEmbeddedField parses embedded fields
-// Add prefix to column name and ensure correct backtick placement
-// Remove original backticks
-// Add prefix and re-add backticks
-func parseEmbeddedField(t reflect.Type, prefix string) []string {
+// Add prefix to column name and ensure correct identifier quoting
+// Remove original quotes/backticks
+// Add prefix and re-add quotes
+func parseEmbeddedField(t reflect.Type, prefix string, driver Dialect) []string {
 	var columns []string
 
 	for i := 0; i < t.NumField(); i++ {
@@ -354,15 +381,15 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 			continue
 		}
 
-		column := parseField(field)
+		column := parseField(field, driver)
 		if column != "" {
 			if prefix != "" {
-				// Add prefix to column name and ensure correct backtick placement
+				// Add prefix to column name and ensure correct identifier quoting
 				parts := strings.SplitN(column, " ", 2)
-				// Remove original backticks
-				columnName := strings.Trim(parts[0], "`")
-				// Add prefix and re-add backticks
-				column = fmt.Sprintf("`%s%s` %s", prefix, columnName, parts[1])
+				// Remove original quotes/backticks
+				columnName := strings.Trim(parts[0], "`\"")
+				// Add prefix and re-add quotes
+				column = fmt.Sprintf("%s %s", quoteIdent(prefix+columnName, driver), parts[1])
 			}
 			columns = append(columns, column)
 		}
@@ -371,7 +398,7 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 	return columns
 }
 
-// getSQLType gets corresponding SQL type based on Go type
+// getSQLType gets corresponding SQL type based on Go type and the selected SQL dialect.
 // Check if type is explicitly specified
 // If it's a pointer type and not primary key, add NULL constraint
 // Handle precision
@@ -379,7 +406,7 @@ func parseEmbeddedField(t reflect.Type, prefix string) []string {
 // Get base type
 // Handle special types
 // If it's a pointer type and not primary key, add NULL constraint
-func getSQLType(field reflect.StructField) string {
+func getSQLType(field reflect.StructField, driver Dialect) string {
 	// Check if type is explicitly specified
 	if sqlType := getTagValue(field, "type"); sqlType != "" {
 		sqlType = strings.ToUpper(sqlType)
@@ -411,47 +438,126 @@ func getSQLType(field reflect.StructField) string {
 	}
 
 	var sqlType string
-	switch fieldType.Kind() {
-	case reflect.Bool:
-		sqlType = "BOOLEAN"
-	case reflect.Int, reflect.Int32:
-		sqlType = "INTEGER"
-	case reflect.Int8:
-		sqlType = "TINYINT"
-	case reflect.Int16:
-		sqlType = "SMALLINT"
-	case reflect.Int64:
-		sqlType = "BIGINT"
-	case reflect.Uint:
-		sqlType = "INTEGER UNSIGNED"
-	case reflect.Uint8:
-		sqlType = "TINYINT UNSIGNED"
-	case reflect.Uint16:
-		sqlType = "SMALLINT UNSIGNED"
-	case reflect.Uint32:
-		sqlType = "INTEGER UNSIGNED"
-	case reflect.Uint64:
-		sqlType = "BIGINT UNSIGNED"
-	case reflect.Float32:
-		sqlType = "FLOAT"
-	case reflect.Float64:
-		sqlType = "DOUBLE"
-	case reflect.String:
-		if size != "" {
-			sqlType = fmt.Sprintf("VARCHAR(%s)", size)
-		} else {
-			sqlType = "VARCHAR(255)"
+	autoIncrement := hasTag(field, "autoIncrement")
+
+	switch driver {
+	case DialectPostgreSQL:
+		switch fieldType.Kind() {
+		case reflect.Bool:
+			sqlType = "BOOLEAN"
+		case reflect.Int, reflect.Int32, reflect.Uint, reflect.Uint32:
+			if autoIncrement {
+				sqlType = "SERIAL"
+			} else {
+				sqlType = "INTEGER"
+			}
+		case reflect.Int8, reflect.Int16:
+			sqlType = "SMALLINT"
+		case reflect.Uint8, reflect.Uint16:
+			sqlType = "SMALLINT"
+		case reflect.Int64, reflect.Uint64:
+			if autoIncrement {
+				sqlType = "BIGSERIAL"
+			} else {
+				sqlType = "BIGINT"
+			}
+		case reflect.Float32:
+			sqlType = "REAL"
+		case reflect.Float64:
+			sqlType = "DOUBLE PRECISION"
+		case reflect.String:
+			if size != "" {
+				sqlType = fmt.Sprintf("VARCHAR(%s)", size)
+			} else {
+				sqlType = "VARCHAR(255)"
+			}
+		default:
+			// Handle special types
+			typeName := fieldType.String()
+			switch typeName {
+			case "time.Time":
+				sqlType = "TIMESTAMP"
+			case "[]byte":
+				sqlType = "BYTEA"
+			default:
+				sqlType = "VARCHAR(255)"
+			}
+		}
+	case DialectSQLite:
+		switch fieldType.Kind() {
+		case reflect.Bool:
+			sqlType = "BOOLEAN"
+		case reflect.Int, reflect.Int32, reflect.Uint, reflect.Uint32:
+			sqlType = "INTEGER"
+		case reflect.Int8, reflect.Uint8:
+			sqlType = "TINYINT"
+		case reflect.Int16, reflect.Uint16:
+			sqlType = "SMALLINT"
+		case reflect.Int64, reflect.Uint64:
+			sqlType = "BIGINT"
+		case reflect.Float32:
+			sqlType = "REAL"
+		case reflect.Float64:
+			sqlType = "DOUBLE"
+		case reflect.String:
+			if size != "" {
+				sqlType = fmt.Sprintf("VARCHAR(%s)", size)
+			} else {
+				sqlType = "TEXT"
+			}
+		default:
+			typeName := fieldType.String()
+			switch typeName {
+			case "time.Time":
+				sqlType = "DATETIME"
+			case "[]byte":
+				sqlType = "BLOB"
+			default:
+				sqlType = "TEXT"
+			}
 		}
 	default:
-		// Handle special types
-		typeName := fieldType.String()
-		switch typeName {
-		case "time.Time":
-			sqlType = "DATETIME"
-		case "[]byte":
-			sqlType = "BLOB"
+		switch fieldType.Kind() {
+		case reflect.Bool:
+			sqlType = "BOOLEAN"
+		case reflect.Int, reflect.Int32:
+			sqlType = "INTEGER"
+		case reflect.Int8:
+			sqlType = "TINYINT"
+		case reflect.Int16:
+			sqlType = "SMALLINT"
+		case reflect.Int64:
+			sqlType = "BIGINT"
+		case reflect.Uint:
+			sqlType = "INTEGER UNSIGNED"
+		case reflect.Uint8:
+			sqlType = "TINYINT UNSIGNED"
+		case reflect.Uint16:
+			sqlType = "SMALLINT UNSIGNED"
+		case reflect.Uint32:
+			sqlType = "INTEGER UNSIGNED"
+		case reflect.Uint64:
+			sqlType = "BIGINT UNSIGNED"
+		case reflect.Float32:
+			sqlType = "FLOAT"
+		case reflect.Float64:
+			sqlType = "DOUBLE"
+		case reflect.String:
+			if size != "" {
+				sqlType = fmt.Sprintf("VARCHAR(%s)", size)
+			} else {
+				sqlType = "VARCHAR(255)"
+			}
 		default:
-			sqlType = "VARCHAR(255)"
+			typeName := fieldType.String()
+			switch typeName {
+			case "time.Time":
+				sqlType = "DATETIME"
+			case "[]byte":
+				sqlType = "BLOB"
+			default:
+				sqlType = "VARCHAR(255)"
+			}
 		}
 	}
 
