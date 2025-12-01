@@ -13,4 +13,4 @@ go.work
 *.build
 Makefile
 Makefile.env
-example/export
+example/output

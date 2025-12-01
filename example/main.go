@@ -10,8 +10,9 @@ import (
 func main() {
 	{
 		sql := gem.New(&gem.Config{
+			Dialect:           gem.DialectMySQL,
 			Tool:              gem.Goose,
-			OutputPath:        "./example/export/goose",
+			OutputPath:        "./example/output/goose",
 			KeepDroppedColumn: false,
 		})
 
@@ -29,8 +30,29 @@ func main() {
 
 	{
 		sql := gem.New(&gem.Config{
+			Dialect:           gem.DialectSQLite,
 			Tool:              gem.GolangMigrate,
-			OutputPath:        "./example/export/go_migrate",
+			OutputPath:        "./example/output/go_migrate",
+			KeepDroppedColumn: false,
+		})
+
+		sql.AddModels(
+			model.User{},
+			model.Model{},
+			model.UserAlias{},
+			model.Address{},
+		)
+
+		if err := sql.Generate(); err != nil {
+			log.Fatalf("run migrator, err: %+v", err)
+		}
+	}
+
+	{
+		sql := gem.New(&gem.Config{
+			Dialect:           gem.DialectPostgreSQL,
+			Tool:              gem.RawSQL,
+			OutputPath:        "./example/output/raw_sql",
 			KeepDroppedColumn: false,
 		})
 
@@ -49,26 +71,7 @@ func main() {
 	{
 		sql := gem.New(&gem.Config{
 			Tool:              gem.RawSQL,
-			OutputPath:        "./example/export/raw_sql",
-			KeepDroppedColumn: false,
-		})
-
-		sql.AddModels(
-			model.User{},
-			model.Model{},
-			model.UserAlias{},
-			model.Address{},
-		)
-
-		if err := sql.Generate(); err != nil {
-			log.Fatalf("run migrator, err: %+v", err)
-		}
-	}
-
-	{
-		sql := gem.New(&gem.Config{
-			Tool:              gem.RawSQL,
-			OutputPath:        "./example/export/raw_sql_aggregation",
+			OutputPath:        "./example/output/raw_sql_aggregation",
 			KeepDroppedColumn: false,
 			RawSQLAggregation: true,
 		})
